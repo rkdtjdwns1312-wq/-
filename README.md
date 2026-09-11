@@ -17,6 +17,8 @@
 5. README, .gitignore 등 추가 항목은 **체크하지 않고** 그대로 `Create repository`를 누릅니다.
 6. 만들어진 저장소 주소(`https://github.com/<내 계정>/kokkiri-site.git`)를 클로드(또는 코덱스)에게 알려주면, 지금까지 만든 코드를 그 주소로 올려줍니다.
 
+> 2026-09-12 완료: 저장소는 `https://github.com/rkdtjdwns1312-wq/-` 이름으로 만들어졌고 코드를 올렸습니다. 이름이 `-`여도 동작에는 문제가 없습니다. 아래 4단계에서 저장소를 고를 때 `-`를 선택하면 됩니다.
+
 ### 2. Cloudflare 가입/로그인
 
 1. [dash.cloudflare.com](https://dash.cloudflare.com)에 접속해 가입하거나 로그인합니다.
