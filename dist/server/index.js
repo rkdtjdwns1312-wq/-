@@ -7,7 +7,7 @@ function originalHtml(edit,key){const controls=edit?'<button id="open" class="pr
 function html(edit,key){
   return originalHtml(edit,key)
     .replace('</script>',(edit?'('+installRoster.toString()+')('+JSON.stringify(people).replaceAll('<','\\u003c')+');':'')+'</script>')
-    .replace('<style>', '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Jua&display=swap"><style>'+designCss)
+    .replace('<style>', '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>'+designCss)
     .replace('<header>⌁ 콕끼리 · 배드민턴 대진표</header>', '<header><a class="brand-home" href="'+(edit?'/operate-'+key:'/')+'"><span class="brand-name">콕<svg class="tiny-shuttle" viewBox="0 0 32 36" aria-hidden="true"><path d="M5 4Q16 0 27 4L21 25H11Z" fill="#fffdf5" stroke="#6a8b70" stroke-width="1.5"/><path d="M10 4L13 25M16 3V25M22 4L19 25M8 13H24M10 20H22" fill="none" stroke="#acc5a4" stroke-width="1.2"/><path d="M10 25H22V28A6 6 0 0 1 10 28Z" fill="#d9b88b" stroke="#7e9d7e" stroke-width="1.5"/></svg>끼리</span><span class="brand-sub">콕하나로 우리끼리</span></a><span class="header-label">함께 치고, 함께 즐겨요</span></header>')
     .replace('<section class="top">','<section class="welcome"><div class="welcome-copy"><span class="eyebrow">KOKKIRI BADMINTON CLUB</span><h1>오늘도 콕끼리와<br>즐거운 한 게임!</h1><p>코트 위에서 만나는 우리.<br>오늘의 대진을 확인하고 함께 뛰어볼까요?</p><a class="court-link" href="#schedule">오늘의 대진 확인하기 ↓</a></div><img class="mascot-play" src="/mascot-play.png" width="1024" height="1024" alt="빨간 유니폼을 입고 배드민턴을 치는 콕끼리"></section><section class="top">')
     .replace('<section class="card">','<section class="card" id="schedule">')
@@ -31,15 +31,15 @@ button:hover{filter:brightness(.95)}button:focus-visible,a:focus-visible{outline
 .empty{padding:24px!important;display:flex;align-items:center;justify-content:center;gap:28px;min-height:240px}.empty strong{font-size:1.2rem;color:#305540}.empty p{font-size:.9rem}.mascot-rest{width:190px;height:190px;object-fit:contain}.match{background:#f8fcf6}.court{font-size:.88rem!important}.rest{font-size:.9rem}footer{text-align:center;color:#7c8472;font-size:.88rem;padding:30px 0 0}
 @media(max-width:650px){.header-label,.brand-sub{display:none}.welcome{grid-template-columns:1fr 38%;min-height:220px;border-radius:20px}.welcome-copy{padding:22px 16px}.welcome h1{font-size:1.75rem}.welcome p{font-size:.88rem}.eyebrow{font-size:.7rem;letter-spacing:0}.mascot-play{height:235px;width:130%;margin-left:-20%}.court-link{font-size:.88rem}.empty{flex-direction:column;gap:0}.empty p{margin-top:6px}.mascot-rest{width:160px;height:160px}.actions{margin-top:12px}.top h1{font-size:1.2rem!important}}
 /* Pastel court greens and light wood brand theme. */
-body{background:#f5f4e9!important;color:#345441!important;font-family:'Gowun Dodum',ui-rounded,'Malgun Gothic',sans-serif!important}
+body{background:#f5f4e9!important;color:#345441!important;font-family:'Noto Sans KR',ui-rounded,'Malgun Gothic',sans-serif!important}
 header{background:#e7ecda!important;border-bottom:3px solid #c9ae8a!important;color:#3e6650!important}
-.brand-name{font-family:'Jua',ui-rounded,sans-serif;font-weight:400!important;font-size:2.65rem!important;letter-spacing:-.1rem!important;display:flex;align-items:center;color:#38694b;text-shadow:0 2px 0 #fff9e9;line-height:1.2}
+.brand-name{font-family:'Do Hyeon',ui-rounded,sans-serif;font-weight:400!important;font-size:2.65rem!important;letter-spacing:-.1rem!important;display:flex;align-items:center;color:#38694b;text-shadow:0 2px 0 #fff9e9;line-height:1.2}
 .tiny-shuttle{width:19px;height:24px;margin:0 3px 0 1px;transform:rotate(15deg);filter:drop-shadow(0 1px 0 #fff)}
 .brand-sub{border-left-color:#c5b48f!important;color:#6c775b;font-size:1rem!important;font-weight:700!important}.header-label{color:#768467}
 .welcome{background:#e9dfc8!important;border-color:#d7c5a6!important;box-shadow:inset 0 0 0 7px #f2ebdc;border-radius:26px!important}
-.welcome h1,.top h1,.head h2,.modal h2{font-family:'Jua',ui-rounded,sans-serif;font-weight:400!important;color:#426a50!important}
+.welcome h1,.top h1,.head h2,.modal h2{font-family:'Do Hyeon',ui-rounded,sans-serif;font-weight:400!important;color:#426a50!important}
 .welcome h1{letter-spacing:0!important;font-size:2.65rem!important}.eyebrow{color:#907753!important}.welcome p{color:#6a7760!important}.court-link{color:#52794f!important}
-button{font-family:'Gowun Dodum',sans-serif!important;border-radius:13px!important}
+button{font-family:'Noto Sans KR',sans-serif!important;border-radius:13px!important}
 .primary{background:#6f9470!important;color:#fff!important;box-shadow:0 3px 0 #507754!important}
 .actions button:not(.primary),.modal button:not(.primary):not(.close){background:#e8dcc5;color:#655c43}
 .card{background:#fffef7!important;border-color:#d8dfc9!important;box-shadow:0 7px 24px #5d73420a!important}
@@ -47,9 +47,22 @@ button{font-family:'Gowun Dodum',sans-serif!important;border-radius:13px!importa
 .round h3 span{background:#dce6bc!important;color:#526b3e}.rest{background:#f0e4ce!important;color:#807051!important}
 .choice{background:#edf2e6!important;color:#405b43}.roster-choice:has(input:checked){background:#dbe9ce!important;border-color:#8ca67d!important}
 .roster-tabs button[aria-selected=true]{background:#799774!important;color:white!important}#selectionCount{color:#5c7955!important}
-dialog{background:#fffdf3}dialog::backdrop{background:#344a3b88!important}input,textarea{font-family:'Gowun Dodum',sans-serif!important;background:#fffef9;border-color:#c8d6be!important}input[type=checkbox]{accent-color:#729364}
+dialog{background:#fffdf3}dialog::backdrop{background:#344a3b88!important}input,textarea{font-family:'Noto Sans KR',sans-serif!important;background:#fffef9;border-color:#c8d6be!important}input[type=checkbox]{accent-color:#729364}
 footer{color:#849077!important}
 @media(max-width:650px){.brand-sub{display:block!important;font-size:.83rem!important;padding-left:10px!important}.brand-home{gap:9px!important}.brand-name{font-size:2.1rem!important}.tiny-shuttle{width:15px;height:19px}.welcome h1{font-size:1.85rem!important}}
+
+/* Bright white and fresh green direction requested by the club. */
+body{background:#f7f9fa!important;color:#24352c!important}
+header{background:#fff!important;border-bottom:1px solid #e4ebe7!important}
+.brand-name{color:#03a94d!important;text-shadow:none!important}.brand-sub{color:#3d6a50!important;border-left-color:#dcebe2!important}.header-label{color:#6a7c70!important}
+.welcome{background:#edfff3!important;border-color:#d1f2dc!important;box-shadow:none!important}
+.welcome h1,.top h1,.head h2,.modal h2{color:#164b2b!important}.eyebrow{color:#079947!important}.welcome p{color:#4e715b!important}.court-link{color:#039944!important}
+.primary{background:#03b95a!important;color:white!important;box-shadow:none!important}
+.actions button:not(.primary),.modal button:not(.primary):not(.close){background:#ebfaf0!important;color:#13713c!important}
+.card{background:white!important;border-color:#e0ebe4!important;box-shadow:0 5px 20px #193e2605!important}.head{border-color:#e7eee9!important}.meta{color:#718178!important}
+.match{background:#fbfffc!important;border-color:#dfeee3!important;border-left-color:#03c75a!important}.court{color:#099a45!important}.round h3 span{background:#d9fbe6!important;color:#147439!important}.rest{background:#f2faf5!important;color:#54725e!important}
+.choice{background:white!important;color:#284c35!important}.roster-choice:has(input:checked){background:#e6ffef!important;border-color:#03bd59!important}.roster-tabs button[aria-selected=true]{background:#03b95a!important;color:white!important}
+dialog{background:white!important}dialog::backdrop{background:#123c245c!important}input,textarea{background:white!important;border-color:#cbded1!important}input[type=checkbox]{accent-color:#03b95a}#selectionCount{color:#0b9b46!important}footer{color:#83938a!important}
 
 `;
 
