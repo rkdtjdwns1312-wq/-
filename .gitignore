@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.claude/
+# wrangler dev 로컬 비밀값 파일 — 절대 저장소에 올리지 않습니다
+.dev.vars
+.dev.vars.*
+*.log
+.DS_Store

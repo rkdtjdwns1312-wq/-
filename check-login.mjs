@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password'};
 const origin='http://localhost:4173';

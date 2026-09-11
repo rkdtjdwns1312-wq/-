@@ -1,0 +1,27 @@
+{
+  // wrangler 설정 파일의 형식을 검사할 때 쓰는 스키마(수정할 필요 없음)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Cloudflare에 등록되는 이 Worker(프로그램)의 이름
+  "name": "kokkiri",
+  // 서버 코드의 시작점(진입점) 파일 경로
+  "main": "dist/server/index.js",
+  // Cloudflare가 이 날짜 기준의 최신 동작 방식을 사용하게 하는 값(바꿀 필요 없음)
+  "compatibility_date": "2025-09-01",
+  // 이미지 등 정적 파일을 올려두는 폴더(Workers Static Assets)
+  "assets": { "directory": "./public" },
+  // 이 사이트가 쓰는 D1 데이터베이스 연결 정보
+  "d1_databases": [
+    {
+      // 서버 코드(env.DB)에서 이 이름으로 데이터베이스에 접근한다
+      "binding": "DB",
+      // Cloudflare 대시보드에 표시되는 데이터베이스 이름
+      "database_name": "kokkiri",
+      // README 3단계에서 Cloudflare가 만들어 준 D1 Database ID를 복사해 붙여넣는다
+      "database_id": "여기에-Cloudflare에서-만든-D1-Database-ID를-붙여넣기",
+      // 이 폴더 안의 0000, 0001... 순서로 데이터베이스 구조를 자동으로 맞춰준다
+      "migrations_dir": "drizzle"
+    }
+  ],
+  // Cloudflare 대시보드에서 요청/오류 로그를 볼 수 있게 하는 설정
+  "observability": { "enabled": true }
+}
