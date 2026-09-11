@@ -1,5 +1,25 @@
 export function client(EDITOR){
   const $=id=>document.getElementById(id),app=$('app'),dialog=$('picker');
+  if(!EDITOR){
+    const accessButton=document.createElement('button');
+    accessButton.className='operator-access';accessButton.textContent='운영진권한';
+    accessButton.setAttribute('aria-haspopup','dialog');document.body.append(accessButton);
+    accessButton.onclick=()=>{
+      dialog.innerHTML='<form id="operatorLogin"><div class="dialog-head"><h2 id="pickerTitle">운영진권한</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="operatorPassword">운영진 비밀번호</label><input id="operatorPassword" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">운영진 화면으로</button><button type="button" id="cancelLogin">취소</button></div></form>';
+      const close=()=>dialog.close();$('closeLogin').onclick=close;$('cancelLogin').onclick=close;
+      $('operatorLogin').onsubmit=async e=>{
+        e.preventDefault();const submit=$('loginSubmit');if(submit.disabled)return;
+        submit.disabled=true;submit.textContent='확인 중…';$('loginError').textContent='';
+        try{
+          const result=await api('/api/operator-login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('operatorPassword').value})});
+          if(!/^\/operate-[a-zA-Z0-9_-]+$/.test(result.redirect))throw Error('운영진 주소를 확인하지 못했습니다.');
+          location.assign(result.redirect);
+        }catch(error){$('loginError').textContent=error.message;$('operatorPassword').focus();$('operatorPassword').select();}
+        finally{submit.disabled=false;submit.textContent='운영진 화면으로';}
+      };
+      dialog.onclose=()=>{dialog.innerHTML='';accessButton.focus();};dialog.showModal();
+    };
+  }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const date=s=>new Date(s).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
   const stamp=()=>date(new Date());

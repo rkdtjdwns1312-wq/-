@@ -2,6 +2,7 @@ import people from './roster.js';
 import images from './images.js';
 import { client } from './boards-client.js';
 import { css } from './boards-style.js';
+import { operatorLogin } from './operator-login.js';
 
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
@@ -35,6 +36,7 @@ function page(editor){
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
   const editor=Boolean(key)&&path==='/operate-'+key?key:'';
+  if(path==='/api/operator-login')return operatorLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path==='/api/people'&&request.method==='GET')return json({people});
   if(path.startsWith('/api/')){
