@@ -39,7 +39,7 @@ export function client(EDITOR){
       try{const x=await api('/api/posts?kind='+kind+'&offset='+offset);if(token!==routeToken)return;
         if(!offset)$('postList').innerHTML='';
         if(!offset&&!x.items.length)$('postList').innerHTML='<div class="empty"><img src="/mascot-rest.png" alt="기다리는 콕끼리"><p>아직 등록된 '+(kind==='schedule'?'대진표':'공지사항')+'가 없습니다.</p></div>';
-        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post" href="#post/'+encodeURIComponent(p.id)+'"><div><div class="post-title">'+esc(p.title)+'</div><small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small></div><span aria-hidden="true">→</span></a>').join(''));
+        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post" href="#post/'+encodeURIComponent(p.id)+'"><div><div class="post-title">'+esc(p.title)+'</div>'+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
         offset+=x.items.length;button.hidden=!x.hasMore;
       }catch(e){if(token===routeToken){message(e.message,true);button.hidden=false;button.textContent='다시 불러오기';}}finally{button.disabled=false;}
     }
@@ -48,7 +48,7 @@ export function client(EDITOR){
   function scheduleHTML(d,editing=false){return d.schedule.map((r,ri)=>'<section class="round"><h3>'+esc(r.round)+' 라운드</h3><div class="matches">'+r.g.map((m,mi)=>'<div class="match '+(editing?'edit-match':'')+'"><div class="court">'+(mi+1)+'번 코트</div>'+m.map((n,si)=>(si===2?'<b class="vs">VS</b>':'')+(editing?'<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'코트 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===n?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>':esc(n)+(si===0||si===2?' · ':''))).join('')+'</div>').join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>').join('');}
   async function detail(id,token){
     const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken)return;
-    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div><h1>'+esc(d.title)+'</h1><p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p></div>'+(EDITOR?'<button id="editPost">수정하기</button>':'')+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+esc(d.body)+'</div>':'<p class="muted">참가 '+d.names.length+'명 · '+d.courts+'코트 · '+d.rounds+'라운드</p>'+scheduleHTML(d))+'</article>';
+    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div><h1>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+'</div>'+(EDITOR?'<button id="editPost">수정하기</button>':'')+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+esc(d.body)+'</div>':'<p class="muted">참가 '+d.names.length+'명 · '+d.courts+'코트 · '+d.rounds+'라운드</p>'+scheduleHTML(d))+'</article>';
     if(EDITOR)$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
