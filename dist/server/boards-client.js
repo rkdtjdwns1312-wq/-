@@ -1,5 +1,13 @@
 export function client(EDITOR){
   const $=id=>document.getElementById(id),app=$('app'),dialog=$('picker');
+  function updateDaysTogether(){
+    const output=$('daysTogether');if(!output)return;
+    const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'numeric',day:'numeric'}).formatToParts(new Date());
+    const today=Date.UTC(Number(parts.find(p=>p.type==='year').value),Number(parts.find(p=>p.type==='month').value)-1,Number(parts.find(p=>p.type==='day').value));
+    const since=Date.UTC(2026,4,8);
+    output.textContent=String(Math.max(1,Math.floor((today-since)/86400000)+1));
+  }
+  updateDaysTogether();setInterval(updateDaysTogether,60000);
   if(!EDITOR){
     const accessButton=document.createElement('button');
     accessButton.className='operator-access';accessButton.textContent='운영진권한';
