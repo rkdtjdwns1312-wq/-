@@ -1,6 +1,8 @@
-// Current baseline from the first sheet of "콕끼리 시드 관리표.xlsx".
-// The second sheet is retained in the workbook as historical reference and is
-// intentionally not used as the live ranking baseline.
+// Current baseline from the first sheet of "콕끼리 시드 관리표.xlsx" (작성기준 2026-09-10).
+// Only name, points and source rank are copied; the seed is always derived from
+// points via seedForPoints(). The sheet's seed column had 주밤(115) and 로토(104)
+// as A+, which the operator confirmed on 2026-09-12 should be A (points rule wins).
+// The workbook's second sheet ("26-08-19 변경") is empty and is not used.
 export const initialRankingRows=[
   ['호잇',123,1],['뚜기',121,2],['주밤',115,3],['로토',104,4],['두진',100,5],
   ['네오',99,6],['시오',99,7],['이코',95,8],['뉴키',93,9],['규현',93,10],
