@@ -102,7 +102,10 @@ export default {async fetch(request,env){
       if(path==='/api/rankings'&&request.method==='GET'){
         await ensureRankingMembers(env.DB,appPeople);
         const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at FROM ranking_members ORDER BY rank ASC').all();
-        return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate:'2026-09-10'});
+        const sourceDate='2026-09-10';
+        const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
+        const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
+        return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate});
       }
       const settleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/settle$/);
       if(settleMatch){

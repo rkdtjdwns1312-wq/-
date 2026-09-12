@@ -160,8 +160,9 @@ export function client(EDITOR){
     };render();dialog.showModal();
   }
   async function seeds(token){
-    await getPeople();const ranking=(await api('/api/rankings')).items;if(token!==routeToken)return;let type='member';
-    app.innerHTML=crumb()+'<h1>시드현황</h1><p class="seed-note">회원 점수는 2026년 9월 10일 기준표에서 시작하며, 정모 1회 출석 +1점과 경기 승 +1점·패 -1점을 누적해 시드를 자동 계산합니다.</p><div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
+    await getPeople();const rankingData=await api('/api/rankings'),ranking=rankingData.items;if(token!==routeToken)return;let type='member';
+    const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
+    app.innerHTML=crumb()+'<h1>시드현황</h1><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다</p><div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
     function movement(row){if(row.previous_rank===row.rank)return '<span class="muted">-</span>';return row.previous_rank>row.rank?'<span class="rank-movement">▲ '+(row.previous_rank-row.rank)+'</span>':'<span class="rank-down">▼ '+(row.rank-row.previous_rank)+'</span>';}
     function render(){
       const term=$('seedSearch').value.trim();$('seedMembers').setAttribute('aria-pressed',String(type==='member'));$('seedGuests').setAttribute('aria-pressed',String(type==='guest'));
