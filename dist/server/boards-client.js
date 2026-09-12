@@ -30,6 +30,8 @@ export function client(EDITOR){
     };
   }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
+  const crown=name=>OPERATORS.has(name)?'<span class="crown" title="운영진" aria-label="운영진">👑</span>':'';
   const date=s=>new Date(s).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
   const stamp=()=>date(new Date());
   function noticeHTML(body){
@@ -84,7 +86,7 @@ export function client(EDITOR){
     const results=d.results||{};
     const cell=(m,mi,ri,si)=>editing
       ? '<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'코트 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===m[si]?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'
-      : '<span class="player">'+esc(m[si])+'</span>';
+      : '<span class="player">'+esc(m[si])+crown(m[si])+'</span>';
     const team=(m,mi,ri,a,b)=>'<div class="team">'+cell(m,mi,ri,a)+'<span class="team-amp">·</span>'+cell(m,mi,ri,b)+'</div>';
     return d.schedule.map((r,ri)=>'<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3></div><div class="matches">'+r.g.map((m,mi)=>{
       const key=ri+'-'+mi,result=results[key],resultControls=(showResults||result)?'<div class="match-result"><span class="result-label">'+(result?'결과: '+(result==='a'?'앞 팀 승리':'뒤 팀 승리'):'승패를 선택해주세요')+'</span>'+(showResults?'<button type="button" class="winner-button '+(result==='a'?'selected':'')+'" data-result-key="'+key+'" data-winner="a" aria-pressed="'+(result==='a')+'">앞 팀 승리</button><button type="button" class="winner-button '+(result==='b'?'selected':'')+'" data-result-key="'+key+'" data-winner="b" aria-pressed="'+(result==='b')+'">뒤 팀 승리</button>':'')+'</div>':'';
@@ -147,7 +149,7 @@ export function client(EDITOR){
     dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div><label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing?.title||'')+'" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다"></label><div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">시드는 표시용이며 대진은 무작위로 만들어집니다.</p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
     const visible=()=>people.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
     const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+people.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+people.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
-    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+esc(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small></label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
+    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+esc(p.name)+crown(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small></label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
     $('choices').onchange=e=>{if(e.target.checked)selected.add(e.target.value);else selected.delete(e.target.value);count();};
     $('memberTab').onclick=()=>{active='member';render();};$('guestTab').onclick=()=>{active='guest';render();};$('searchPeople').oninput=render;$('selectAll').onclick=()=>{visible().forEach(p=>selected.add(p.id));render();};$('clearAll').onclick=()=>{selected.clear();render();};$('closePicker').onclick=()=>dialog.close();
     $('generate').onclick=()=>{
@@ -167,7 +169,7 @@ export function client(EDITOR){
     function render(){
       const term=$('seedSearch').value.trim();$('seedMembers').setAttribute('aria-pressed',String(type==='member'));$('seedGuests').setAttribute('aria-pressed',String(type==='guest'));
       if(type==='member'){
-        const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';const rows=list.map(row=>'<tr><td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+esc(row.name)+'</td><td><span class="seed-badge">'+esc(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');$('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
+        const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';const rows=list.map(row=>'<tr><td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+esc(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+esc(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');$('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest').map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));
         const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
