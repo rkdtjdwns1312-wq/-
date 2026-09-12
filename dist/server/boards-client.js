@@ -32,6 +32,32 @@ export function client(EDITOR){
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const date=s=>new Date(s).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
   const stamp=()=>date(new Date());
+  function noticeHTML(body){
+    if(!body)return'';
+    const lines=String(body).replace(/\r\n?/g,'\n').split('\n');
+    const parts=[];let list=false;
+    function closeList(){if(list){parts.push('</ul>');list=false;}}
+    for(const raw of lines){
+      const line=raw.replace(/\s+$/,'');
+      if(!line.trim()){closeList();continue;}
+      const indented=/^[ \t]/.test(line);
+      const text=line.trim();
+      let m;
+      if(m=text.match(/^(\d{1,2})[.)]\s*(.+)$/)){closeList();parts.push('<h2 class="nb-section"><span class="nb-num">'+esc(m[1])+'</span><span>'+esc(m[2])+'</span></h2>');continue;}
+      if(m=text.match(/^\[(.+)\]$/)){closeList();parts.push('<h3 class="nb-sub">'+esc(m[1])+'</h3>');continue;}
+      if(/^\d{1,2}월$/.test(text)){closeList();parts.push('<p class="nb-month">'+esc(text)+'</p>');continue;}
+      if(m=text.match(/^(?:(▶|►|▸|▷|•|・|·|ㄴ)\s*|(-|–)\s+)(.+)$/)){m=[m[0],m[1]||m[2],m[3]];if(!list){parts.push('<ul class="nb-list">');list=true;}parts.push('<li>'+esc(m[2])+'</li>');continue;}
+      if(indented){
+        if(list)parts[parts.length-1]=parts[parts.length-1].replace(/<\/li>$/,()=>'<span class="nb-cont">'+esc(text)+'</span></li>');
+        else parts.push('<p>'+esc(text)+'</p>');
+        continue;
+      }
+      if(/^(🔵|※|❗|⚠️?|❕|★)/.test(text)){closeList();parts.push('<p class="nb-note">'+esc(text)+'</p>');continue;}
+      closeList();parts.push('<p>'+esc(text)+'</p>');
+    }
+    closeList();
+    return parts.join('');
+  }
   let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home';
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
@@ -48,7 +74,7 @@ export function client(EDITOR){
       try{const x=await api('/api/posts?kind='+kind+'&offset='+offset);if(token!==routeToken)return;
         if(!offset)$('postList').innerHTML='';
         if(!offset&&!x.items.length)$('postList').innerHTML='<div class="empty"><img src="/mascot-rest.png" alt="기다리는 콕끼리"><p>아직 등록된 '+(kind==='schedule'?'대진표':'공지사항')+'가 없습니다.</p></div>';
-        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post" href="#post/'+encodeURIComponent(p.id)+'"><div><div class="post-title">'+esc(p.title)+'</div>'+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
+        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post'+(kind==='notice'?' post-notice':'')+'" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':'')+'<div class="post-title">'+esc(p.title)+'</div>'+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
         offset+=x.items.length;button.hidden=!x.hasMore;
       }catch(e){if(token===routeToken){message(e.message,true);button.hidden=false;button.textContent='다시 불러오기';}}finally{button.disabled=false;}
     }
@@ -63,7 +89,7 @@ export function client(EDITOR){
   }
   async function detail(id,token){
     const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken)return;
-    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div><h1>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+(EDITOR&&!(d.kind==='schedule'&&d.settledAt)?'<button id="editPost">수정하기</button>':'')+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+esc(d.body)+'</div>':'<p class="muted">참가 '+d.names.length+'명 · '+d.courts+'코트 · '+d.rounds+'라운드</p>'+scheduleHTML(d,false,Boolean(EDITOR&&!d.settledAt)))+'</article>';
+    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+(EDITOR&&!(d.kind==='schedule'&&d.settledAt)?'<button id="editPost">수정하기</button>':'')+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<p class="muted">참가 '+d.names.length+'명 · '+d.courts+'코트 · '+d.rounds+'라운드</p>'+scheduleHTML(d,false,Boolean(EDITOR&&!d.settledAt)))+'</article>';
     if(EDITOR&&d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('[data-result-key]').forEach(button=>button.onclick=()=>{const next=structuredClone(d);next.results={...(d.results||{}),[button.dataset.resultKey]:button.dataset.winner};editSchedule(next);window.scrollTo(0,0);});
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
   }
@@ -90,7 +116,7 @@ export function client(EDITOR){
     if($('settlePost'))$('settlePost').onclick=settle;
     $('cancelEdit').onclick=cancelEdit;
   }
-  function editNotice(d){startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
+  function editNotice(d){startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
   function cancelEdit(){if(dirty&&!confirm('저장하지 않은 변경 내용을 취소할까요?'))return;const target=draft.version?'#post/'+draft.id:'#'+draft.kind;dirty=false;draft=null;if(location.hash===target)route();else location.hash=target;}
   async function persistDraft(){
     const {data}=await api('/api/posts/'+draft.id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({kind:draft.kind,version:draft.version,operation:draft.operation,data:draft})});draft=data;dirty=false;return data;
@@ -138,7 +164,10 @@ export function client(EDITOR){
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';const rows=list.map(row=>'<tr><td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+esc(row.name)+'</td><td><span class="seed-badge">'+esc(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');$('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
-        const list=people.filter(p=>p.type==='guest'&&p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';$('seedList').innerHTML='<div class="people-grid">'+(list.map(p=>'<div class="person"><span>'+esc(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small></div>').join('')||'<p>검색 결과가 없습니다.</p>')+'</div>';
+        const ranked=people.filter(p=>p.type==='guest').map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));
+        const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
+        const rows=list.map(p=>'<tr><td>'+p.rank+'</td><td><span class="muted">-</span></td><td>'+esc(p.name)+'</td><td><span class="seed-badge">'+esc(p.seed||'미정')+'</span></td><td>'+(typeof p.points==='number'?p.points:'-')+'</td><td><span class="muted">-</span></td><td><span class="muted">-</span></td><td><span class="muted">-</span></td></tr>').join('');
+        $('seedList').innerHTML=rows?'<p class="seed-note">게스트 점수는 2026년 9월 10일 기준표 값이며, 정모 출석·승패 점수 누적에는 반영되지 않습니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }
     }
     $('seedMembers').onclick=()=>{type='member';render();};$('seedGuests').onclick=()=>{type='guest';render();};$('seedSearch').oninput=render;render();
