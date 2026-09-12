@@ -96,11 +96,12 @@ export function client(EDITOR){
       return '<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
         const key=ri+'-'+mi,result=results[key];
         const showWin=scored&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
-        const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+(result===side?' win':'')+'">'+team(m,mi,ri,a,b)+(showWin?winBtn(key,side,result,locked):'')+'</div>';
+        const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+(result===side?' win':'')+'">'+team(m,mi,ri,a,b)+'</div>';
+        const mid=scored?'<div class="vs-cluster">'+(showWin?winBtn(key,'a',result,locked):'')+'<b class="vs">VS</b>'+(showWin?winBtn(key,'b',result,locked):'')+'</div>':'<b class="vs">VS</b>';
         let note='';
         if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
         else if(showWin&&!result&&!locked)note='<div class="match-hint">이긴 팀의 <b>승</b>을 눌러주세요</div>';
-        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams">'+twrap(0,1,'a')+'<b class="vs">VS</b>'+twrap(2,3,'b')+'</div>'+note+'</div>';
+        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
       }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
     }).join('');
   }
