@@ -62,7 +62,8 @@ export function client(EDITOR){
     closeList();
     return parts.join('');
   }
-  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1;
+  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false;
+  const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}};
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
   async function getPeople(){if(!people.length)people=(await api('/api/people')).people;return people;}
@@ -123,11 +124,13 @@ export function client(EDITOR){
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
     const rtabs=app.querySelector('.round-tabs');if(rtabs)rtabs.onclick=e=>{const b=e.target.closest('.round-tab');if(!b)return;viewRound=+b.dataset.roundTab;app.querySelectorAll('.round-tab').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on));});app.querySelectorAll('[data-round-panel]').forEach(p=>{p.hidden=(+p.dataset.roundPanel)!==viewRound;});};
+    stopPoll();
+    if(d.kind==='schedule'&&!d.settledAt){const myToken=token;pollTimer=setInterval(async()=>{if(myToken!==routeToken){stopPoll();return;}if(recordingResult||saving||dialog.open)return;try{const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;if(myToken===routeToken&&(fresh.version!==d.version||Boolean(fresh.settledAt)!==Boolean(d.settledAt))){stopPoll();detail(d.id,routeToken);}}catch(e){}},5000);}
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
   function editSchedule(d){
-    startDraft(d);draft.results=draft.results||{};
+    stopPoll();startDraft(d);draft.results=draft.results||{};
     app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수 자리는 드롭다운으로 바꿀 수 있어요. 승패 기록과 대진 종료(점수 확정)는 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
     $('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};
     $('editMatches').onclick=e=>{
@@ -145,7 +148,7 @@ export function client(EDITOR){
     $('savePost').onclick=save;
     $('cancelEdit').onclick=cancelEdit;
   }
-  function editNotice(d){startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
+  function editNotice(d){stopPoll();startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
   function cancelEdit(){if(dirty&&!confirm('저장하지 않은 변경 내용을 취소할까요?'))return;const target=draft.version?'#post/'+draft.id:'#'+draft.kind;dirty=false;draft=null;if(location.hash===target)route();else location.hash=target;}
   async function persistDraft(){
     const {data}=await api('/api/posts/'+draft.id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({kind:draft.kind,version:draft.version,operation:draft.operation,data:draft})});draft=data;dirty=false;return data;
@@ -159,10 +162,12 @@ export function client(EDITOR){
   async function recordResult(d,btn){
     const key=btn.dataset.resultKey,winner=btn.dataset.winner,matchEl=btn.closest('.match');
     const prev=d.results?.[key];if(prev===winner)return;
+    recordingResult=true;
     applyWin(matchEl,winner);
     d.results={...(d.results||{}),[key]:winner};
-    try{await saveResult(d.id,key,winner);if(EDITOR){routeToken++;detail(d.id,routeToken);}}
+    try{const resp=await saveResult(d.id,key,winner);if(resp&&resp.data&&typeof resp.data.version==='number')d.version=resp.data.version;if(EDITOR){routeToken++;detail(d.id,routeToken);}}
     catch(e){if(prev){d.results[key]=prev;applyWin(matchEl,prev);}else{delete d.results[key];applyWin(matchEl,null);}message(e.message||'승패를 저장하지 못했어요.',true);}
+    finally{recordingResult=false;}
   }
   function applyWin(matchEl,w){if(!matchEl)return;matchEl.classList.remove('result-a','result-b');if(w)matchEl.classList.add('has-result','result-'+w);else matchEl.classList.remove('has-result');const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',w==='a');if(wraps[1])wraps[1].classList.toggle('win',w==='b');matchEl.querySelectorAll('.win-pick').forEach(b=>{const on=b.dataset.winner===w;b.classList.toggle('picked',on);b.setAttribute('aria-pressed',String(on));});if(w){const h=matchEl.querySelector('.match-hint');if(h)h.remove();}}
   async function saveResult(id,key,winner){let last;for(let i=0;i<3;i++){try{return await api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}catch(e){last=e;if(i<2&&/다른 기기/.test(e.message||'')){await new Promise(r=>setTimeout(r,250));continue;}throw e;}}throw last;}
@@ -253,7 +258,7 @@ export function client(EDITOR){
     $('seedMembers').onclick=()=>{type='member';render();};$('seedGuests').onclick=()=>{type='guest';render();};$('seedSearch').oninput=render;render();
   }
   async function route(){
-    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;app.innerHTML='<p class="empty">불러오는 중…</p>';
+    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;stopPoll();app.innerHTML='<p class="empty">불러오는 중…</p>';
     try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash.startsWith('#post/'))await detail(hash.slice(6),token);else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
   window.addEventListener('hashchange',()=>{if(saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);});
