@@ -138,6 +138,14 @@ export default {async fetch(request,env){
         const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
         return row?json({data:unpack(row)}):json({error:'게시글을 찾을 수 없습니다.'},404);
       }
+      if(request.method==='DELETE'){
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
+        const existing=await env.DB.prepare('SELECT payload,kind FROM board_posts WHERE id=?').bind(id).first();
+        if(!existing)return json({error:'삭제할 게시글이 없습니다.'},404);
+        if(existing.kind==='schedule'&&JSON.parse(existing.payload).settledAt)return json({error:'이미 점수가 반영된 대진표는 삭제할 수 없습니다.'},409);
+        await env.DB.prepare('DELETE FROM board_posts WHERE id=?').bind(id).run();
+        return json({data:{deleted:true}});
+      }
       if(request.method!=='PUT')return json({error:'허용되지 않은 요청입니다.'},405);
       if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 저장할 수 있습니다.'},403);
       const raw=await request.text();if(raw.length>200000)return json({error:'내용이 너무 큽니다.'},413);
