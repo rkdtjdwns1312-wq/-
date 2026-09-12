@@ -26,6 +26,10 @@
 3. workers.dev 하위 도메인 이름을 정하라고 하면 **모임 이름으로** 정합니다(예: `kokkiri-badminton`). 이 이름이 홈페이지 주소에 그대로 들어가므로(`https://kokkiri.kokkiri-badminton.workers.dev`), **개인 아이디나 이름은 넣지 않습니다.** 나중에 바꾸려면 `Workers & Pages` → 오른쪽 `Account details`의 하위 도메인 옆 `Change`를 누르면 됩니다.
 4. GitHub 계정 이름은 저장소가 비공개(Private)라 회원들에게 보이지 않습니다. 홈페이지 주소에는 Worker 이름(`kokkiri`)과 위에서 정한 하위 도메인만 들어갑니다.
 
+> 2026-09-12 완료: 하위 도메인을 `kokkiri-badminton`으로 정했고, 3~4단계(D1 `kokkiri` 생성, 저장소 연결, 첫 배포)도 끝났습니다. 홈페이지 주소는 **https://kokkiri.kokkiri-badminton.workers.dev** 입니다. 남은 것은 5단계 비밀값 입력뿐입니다.
+>
+> 참고: `wrangler.jsonc`의 `"keep_names": false`는 지우면 안 됩니다. 이 값이 없으면 회원 화면이 비어 보입니다(첫 배포에서 겪은 문제).
+
 ### 3. D1 데이터베이스 만들기
 
 1. 왼쪽 메뉴에서 `Storage & Databases`를 누릅니다.

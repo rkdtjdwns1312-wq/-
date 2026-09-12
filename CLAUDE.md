@@ -103,7 +103,7 @@
 - 실제 홈페이지 소스: `kokkiri-site\` (브랜치 main). 원격 두 개:
   - `origin` = GitHub `https://github.com/rkdtjdwns1312-wq/-.git` — **공용 원본**(사용자가 2026-09-12 만든 저장소, 이름이 `-`). Codex와 Claude Code 모두 여기에 push한다. 첫 push는 2026-09-12 02:47 완료. 저장소 이름을 바꾸면 `git remote set-url origin <새 주소>`로 맞춘다.
   - `codex-sites` = 옛 Codex Sites 저장소 `https://git.chatgpt-team.site/...` — 보존만 하고 더 이상 push하지 않는다. 옛 공개 주소 `https://kokkiri-badminton-draw.rkdtjdwns1312.chatgpt.site`는 새 주소가 확인될 때까지 그대로 둔다.
-- 배포: GitHub `main`에 push하면 Cloudflare Workers Builds가 자동으로 `npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`를 실행해 배포한다. 설정은 `kokkiri-site\wrangler.jsonc`(Worker 이름 kokkiri, D1 바인딩 DB, 마이그레이션 폴더 drizzle, 정적 자산 public). 새 주소는 `https://kokkiri.<사용자 하위도메인>.workers.dev`. 초기 설정 절차는 `kokkiri-site\README.md`.
+- 배포: GitHub `main`에 push하면 Cloudflare Workers Builds가 자동으로 `npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`를 실행해 배포한다. 설정은 `kokkiri-site\wrangler.jsonc`(Worker 이름 kokkiri, D1 바인딩 DB, 마이그레이션 폴더 drizzle, 정적 자산 public). 공개 주소는 **https://kokkiri.kokkiri-badminton.workers.dev** (2026-09-12 첫 배포, 하위도메인 `kokkiri-badminton`). 초기 설정 절차는 `kokkiri-site\README.md`. `wrangler.jsonc`의 `keep_names: false`는 회원 화면 스크립트(`client.toString()`)가 브라우저에서 돌게 하는 필수 설정이므로 지우지 않는다.
 - 비밀값 `EDITOR_KEY`, `OPERATOR_PASSWORD`는 Cloudflare 대시보드 Secrets에 사용자가 직접 넣는다. 에이전트는 값을 묻지도 적지도 않는다.
 - 작업 전 `git pull --ff-only origin main`(GitHub). 이 PC의 git 자격 저장소에 GitHub 자격이 있어 Claude Code도 push할 수 있다. 사용자는 이 저장소의 일반 commit·pull·push를 승인했다(요청 025). 강제 push, hard reset 금지. 로컬 변경 보존.
 - Claude Code 커밋 메시지 끝에는 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`를 붙인다. 저장소의 기존 작성자 설정(Codex)은 변경하지 않는다.
