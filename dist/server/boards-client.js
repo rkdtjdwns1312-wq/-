@@ -82,11 +82,8 @@ export function client(EDITOR){
     }
     $('more').onclick=more;await more();
   }
-  function winToggle(key,result,locked){
-    return '<div class="win-toggle'+(result?' is-'+result:'')+(locked?' locked':'')+'" role="group" aria-label="승리한 팀 선택">'
-      +'<button type="button" class="win-side win-a" data-result-key="'+key+'" data-winner="a" aria-pressed="'+(result==='a')+'"'+(locked?' disabled':'')+'>승리</button>'
-      +'<button type="button" class="win-side win-b" data-result-key="'+key+'" data-winner="b" aria-pressed="'+(result==='b')+'"'+(locked?' disabled':'')+'>승리</button>'
-      +'<span class="win-knob" aria-hidden="true"></span></div>';
+  function winBtn(key,side,result,locked){
+    return '<button type="button" class="win-pick'+(result===side?' picked':'')+'" data-result-key="'+key+'" data-winner="'+side+'" aria-pressed="'+(result===side)+'"'+(locked?' disabled':'')+' aria-label="이 팀 승리">승</button>';
   }
   function scheduleHTML(d,editing=false,showResults=false){
     const results=d.results||{};
@@ -98,10 +95,12 @@ export function client(EDITOR){
       const scored=r.method!=='random';
       return '<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
         const key=ri+'-'+mi,result=results[key];
-        let resultControls='';
-        if(!scored)resultControls='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
-        else if(showResults||result)resultControls='<div class="match-result">'+winToggle(key,result,Boolean(d.settledAt)&&!editing)+((result||d.settledAt)?'':'<span class="win-hint">승리한 팀을 눌러주세요</span>')+'</div>';
-        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams"><div class="team-wrap'+(result==='a'?' win':'')+'">'+team(m,mi,ri,0,1)+'</div><b class="vs">VS</b><div class="team-wrap'+(result==='b'?' win':'')+'">'+team(m,mi,ri,2,3)+'</div></div>'+resultControls+'</div>';
+        const showWin=scored&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
+        const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+(result===side?' win':'')+'">'+team(m,mi,ri,a,b)+(showWin?winBtn(key,side,result,locked):'')+'</div>';
+        let note='';
+        if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
+        else if(showWin&&!result&&!locked)note='<div class="match-hint">이긴 팀의 <b>승</b>을 눌러주세요</div>';
+        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams">'+twrap(0,1,'a')+'<b class="vs">VS</b>'+twrap(2,3,'b')+'</div>'+note+'</div>';
       }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
     }).join('');
   }
@@ -113,7 +112,7 @@ export function client(EDITOR){
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt&&allScoredDone)?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 종료</button></div>':'';
     const mvpCls=(d.kind==='schedule'&&d.settledAt&&Array.isArray(d.mvp)&&d.mvp.length)?' class="mvp-title"':'';
     app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1'+mvpCls+'>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';
-    if(d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('.win-side:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn));
+    if(d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn));
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
@@ -151,16 +150,14 @@ export function client(EDITOR){
     catch(e){message(e.message,true);}finally{saving=false;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);}
   }
   async function recordResult(d,btn){
-    const key=btn.dataset.resultKey,winner=btn.dataset.winner,toggle=btn.closest('.win-toggle'),matchEl=btn.closest('.match');
+    const key=btn.dataset.resultKey,winner=btn.dataset.winner,matchEl=btn.closest('.match');
     const prev=d.results?.[key];if(prev===winner)return;
-    applyToggle(toggle,winner);
-    if(matchEl){matchEl.classList.remove('result-a','result-b');matchEl.classList.add('has-result','result-'+winner);const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',winner==='a');if(wraps[1])wraps[1].classList.toggle('win',winner==='b');}
-    const box=toggle?toggle.parentElement:null,hint=box?box.querySelector('.win-hint'):null;if(hint)hint.remove();
+    applyWin(matchEl,winner);
     d.results={...(d.results||{}),[key]:winner};
     try{await saveResult(d.id,key,winner);if(EDITOR){routeToken++;detail(d.id,routeToken);}}
-    catch(e){if(prev){d.results[key]=prev;applyToggle(toggle,prev);}else{delete d.results[key];applyToggle(toggle,null);if(matchEl){matchEl.classList.remove('has-result','result-a','result-b');matchEl.querySelectorAll('.team-wrap').forEach(w=>w.classList.remove('win'));}}message(e.message||'승패를 저장하지 못했어요.',true);}
+    catch(e){if(prev){d.results[key]=prev;applyWin(matchEl,prev);}else{delete d.results[key];applyWin(matchEl,null);}message(e.message||'승패를 저장하지 못했어요.',true);}
   }
-  function applyToggle(t,w){if(!t)return;t.classList.remove('is-a','is-b');if(w)t.classList.add('is-'+w);t.querySelectorAll('.win-side').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.winner===w)));}
+  function applyWin(matchEl,w){if(!matchEl)return;matchEl.classList.remove('result-a','result-b');if(w)matchEl.classList.add('has-result','result-'+w);else matchEl.classList.remove('has-result');const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',w==='a');if(wraps[1])wraps[1].classList.toggle('win',w==='b');matchEl.querySelectorAll('.win-pick').forEach(b=>{const on=b.dataset.winner===w;b.classList.toggle('picked',on);b.setAttribute('aria-pressed',String(on));});if(w){const h=matchEl.querySelector('.match-hint');if(h)h.remove();}}
   async function saveResult(id,key,winner){let last;for(let i=0;i<3;i++){try{return await api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}catch(e){last=e;if(i<2&&/다른 기기/.test(e.message||'')){await new Promise(r=>setTimeout(r,250));continue;}throw e;}}throw last;}
   async function endMatch(d){
     if(!(await confirmDialog('정말 확정하시겠습니까? 확정하면 출석·승패 점수가 시드현황에 반영되고 되돌릴 수 없습니다.')))return;
