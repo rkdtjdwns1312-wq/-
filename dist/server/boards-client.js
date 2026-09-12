@@ -139,27 +139,63 @@ export function client(EDITOR){
     try{const saved=await persistDraft();const {data}=await api('/api/posts/'+saved.id+'/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:saved.version,operation:crypto.randomUUID()})});draft=null;dirty=false;message('점수 반영이 완료되었습니다. 시드현황에 새 순위가 반영됩니다.');location.hash='#post/'+data.id;}
     catch(e){message(e.message,true);}finally{saving=false;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);}
   }
-  function generate(names,courts,count){
-    const rounds=[];for(let r=1;r<=count;r++){const a=[...names];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}const cap=Math.min(courts,Math.floor(a.length/4)),g=[];for(let i=0;i<cap*4;i+=4)g.push(a.slice(i,i+4));rounds.push({round:r,g,rest:a.slice(cap*4)});}return rounds;
+  function generate(roster,courts,rounds,methods){
+    const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+    const pts=p=>Number.isFinite(p.points)?p.points:0;
+    const roleRank=p=>p.type==='guest'?3:p.late?2:p.operator?1:0; // 클수록 먼저 쉼(회원0<운영진1<늦참2<게스트3)
+    const cap=Math.min(courts,Math.floor(roster.length/4));
+    const plays=new Map(roster.map(p=>[p.id,0]));
+    const out=[];
+    for(let r=0;r<rounds;r++){
+      const order=shuffle(roster).sort((a,b)=>roleRank(a)-roleRank(b)||(plays.get(a.id)-plays.get(b.id)));
+      const playing=order.slice(0,cap*4),resting=order.slice(cap*4);
+      playing.forEach(p=>plays.set(p.id,plays.get(p.id)+1));
+      const method=methods[r]||'random';
+      const groups=Array.from({length:cap},()=>[]);
+      if(method==='random'){const sh=shuffle(playing);for(let i=0;i<cap*4;i++)groups[Math.floor(i/4)].push(sh[i]);}
+      else{const sorted=[...playing].sort((a,b)=>pts(b)-pts(a)||Math.random()-.5);
+        if(method==='same')for(let i=0;i<cap*4;i++)groups[Math.floor(i/4)].push(sorted[i]);
+        else for(let i=0;i<cap*4;i++)groups[i%cap].push(sorted[i]);} // balanced(인접=실력균형): 사분위 라운드로빈
+      const g=groups.map(group=>{
+        if(method==='random')return group.map(p=>p.name);
+        const s=[...group].sort((a,b)=>pts(b)-pts(a));
+        return [s[0].name,s[3].name,s[1].name,s[2].name]; // 균형: (최고+최저) vs (중간 둘), 앞2=A팀 뒤2=B팀
+      });
+      out.push({round:r+1,g,rest:resting.map(p=>p.name)});
+    }
+    return out;
   }
   async function openPicker(existing){
     if(!EDITOR)return;
     try{await getPeople();}catch(e){message(e.message,true);return;}
     let active='member',selected=new Set(existing?.participantIds?.length?existing.participantIds:people.filter(p=>existing?.names.includes(nameOf(p))).map(p=>p.id));
-    dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div><label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing?.title||'')+'" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다"></label><div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">시드는 표시용이며 대진은 무작위로 만들어집니다.</p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
+    let methods=Array.from({length:Number(existing?.rounds)||4},()=>'random');
+    let lateIds=new Set();
+    dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div><label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing?.title||'')+'" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다"></label><div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div id="roundMethods" class="round-methods"></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">라운드마다 매칭 방식을 고르면 시드 점수를 반영해 대진이 만들어집니다. 동일=점수가 가까운 사람끼리, 인접=실력 균형(강약 섞기), 랜덤=점수 무관. 늦참자는 아래 목록에서 표시하면 쉬는 순서가 조정됩니다.</p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
     const visible=()=>people.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
     const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+people.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+people.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
-    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+esc(p.name)+crown(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small></label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
+    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+esc(p.name)+crown(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small>'+'<button type="button" class="late-btn'+(lateIds.has(p.id)?' on':'')+'" data-id="'+esc(p.id)+'">늦참</button>'+'</label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
+    const methodLabels=[['same','동일'],['balanced','인접'],['random','랜덤']];
+    function renderMethods(){
+      const n=Math.max(1,Math.min(20,Number($('rounds').value)||1));
+      if(methods.length<n)while(methods.length<n)methods.push('random');
+      if(methods.length>n)methods=methods.slice(0,n);
+      $('roundMethods').innerHTML='<div class="rm-title">라운드별 매칭 방식</div>'+methods.map((mth,i)=>'<div class="rm-row"><span class="rm-round">'+(i+1)+'R</span><div class="rm-opts">'+methodLabels.map(([v,l])=>'<button type="button" class="rm-btn'+(mth===v?' on':'')+'" data-r="'+i+'" data-v="'+v+'">'+l+'</button>').join('')+'</div></div>').join('');
+    }
     $('choices').onchange=e=>{if(e.target.checked)selected.add(e.target.value);else selected.delete(e.target.value);count();};
+    $('choices').addEventListener('click',e=>{const b=e.target.closest('.late-btn');if(!b)return;e.preventDefault();const id=b.dataset.id;if(lateIds.has(id))lateIds.delete(id);else lateIds.add(id);b.classList.toggle('on');b.setAttribute('aria-pressed',String(lateIds.has(id)));});
+    $('roundMethods').onclick=e=>{const b=e.target.closest('.rm-btn');if(!b)return;methods[+b.dataset.r]=b.dataset.v;renderMethods();};
+    $('rounds').oninput=renderMethods;
     $('memberTab').onclick=()=>{active='member';render();};$('guestTab').onclick=()=>{active='guest';render();};$('searchPeople').oninput=render;$('selectAll').onclick=()=>{visible().forEach(p=>selected.add(p.id));render();};$('clearAll').onclick=()=>{selected.clear();render();};$('closePicker').onclick=()=>dialog.close();
     $('generate').onclick=()=>{
       const c=Number($('courts').value),r=Number($('rounds').value),picked=people.filter(p=>selected.has(p.id));
       if(picked.length<4)return alert('참가자 4명 이상을 선택해주세요.');
       if(!Number.isInteger(c)||c<1||c>20||!Number.isInteger(r)||r<1||r>20)return alert('코트와 라운드는 1~20 사이 정수로 입력해주세요.');
       if(existing&&!confirm('기존 대진 구성을 새로 만듭니다. 저장하기 전까지 게시된 대진은 그대로 유지됩니다. 계속할까요?'))return;
-      const names=picked.map(nameOf),d={id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title:$('newTitle').value.trim()||stamp(),names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule:generate(names,c,r),results:{}};
+      const roster=picked.map(p=>({id:p.id,name:nameOf(p),type:p.type,points:Number(p.points)||0,late:lateIds.has(p.id),operator:OPERATORS.has(p.name)}));
+      const names=roster.map(x=>x.name),d={id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title:$('newTitle').value.trim()||stamp(),names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule:generate(roster,c,r,methods),results:{}};
       dialog.close();editSchedule(d);dirty=true;window.scrollTo(0,0);
-    };render();dialog.showModal();
+    };render();renderMethods();dialog.showModal();
   }
   async function seeds(token){
     await getPeople();const rankingData=await api('/api/rankings'),ranking=rankingData.items;if(token!==routeToken)return;let type='member';

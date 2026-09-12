@@ -93,8 +93,8 @@ export default {async fetch(request,env){
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({people:appPeople});
     await ensureRankingMembers(env.DB,appPeople);
-    const {results}=await env.DB.prepare('SELECT member_id,seed FROM ranking_members').all(),seeds=new Map(results.map(row=>[row.member_id,row.seed]));
-    return json({people:appPeople.map(person=>seeds.has(person.id)?{...person,seed:seeds.get(person.id)}:person)});
+    const {results}=await env.DB.prepare('SELECT member_id,seed,points FROM ranking_members').all(),info=new Map(results.map(row=>[row.member_id,row]));
+    return json({people:appPeople.map(person=>info.has(person.id)?{...person,seed:info.get(person.id).seed,points:info.get(person.id).points}:person)});
   }
   if(path.startsWith('/api/')){
     try{
