@@ -66,7 +66,7 @@ export function client(EDITOR){
   async function getPeople(){if(!people.length)people=(await api('/api/people')).people;return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
-  function home(){app.innerHTML='<section class="home-intro"><div><h1>콕하나로 우리끼리</h1><p>오늘의 소식과 대진을 한곳에서.</p></div><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu featured" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'');if(EDITOR)$('homeNew').onclick=()=>openPicker(null);}
+  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><div><h1>콕하나로 우리끼리</h1><p>오늘의 소식과 대진을 한곳에서.</p></div><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu featured" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">✨ 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' · '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
     if(EDITOR)$('newPost').onclick=()=>kind==='schedule'?openPicker(null):editNotice({id:crypto.randomUUID(),kind,version:0,title:'',body:''});
@@ -82,30 +82,47 @@ export function client(EDITOR){
     }
     $('more').onclick=more;await more();
   }
+  function winToggle(key,result,locked){
+    return '<div class="win-toggle'+(result?' is-'+result:'')+(locked?' locked':'')+'" role="group" aria-label="승리한 팀 선택">'
+      +'<button type="button" class="win-side win-a" data-result-key="'+key+'" data-winner="a" aria-pressed="'+(result==='a')+'"'+(locked?' disabled':'')+'>승리</button>'
+      +'<button type="button" class="win-side win-b" data-result-key="'+key+'" data-winner="b" aria-pressed="'+(result==='b')+'"'+(locked?' disabled':'')+'>승리</button>'
+      +'<span class="win-knob" aria-hidden="true"></span></div>';
+  }
   function scheduleHTML(d,editing=false,showResults=false){
     const results=d.results||{};
     const cell=(m,mi,ri,si)=>editing
       ? '<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'코트 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===m[si]?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'
       : '<span class="player">'+esc(m[si])+crown(m[si])+'</span>';
     const team=(m,mi,ri,a,b)=>'<div class="team">'+cell(m,mi,ri,a)+'<span class="team-amp">·</span>'+cell(m,mi,ri,b)+'</div>';
-    return d.schedule.map((r,ri)=>'<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3></div><div class="matches">'+r.g.map((m,mi)=>{
-      const key=ri+'-'+mi,result=results[key],resultControls=(showResults||result)?'<div class="match-result"><span class="result-label">'+(result?'결과: '+(result==='a'?'앞 팀 승리':'뒤 팀 승리'):'승패를 선택해주세요')+'</span>'+(showResults?'<button type="button" class="winner-button '+(result==='a'?'selected':'')+'" data-result-key="'+key+'" data-winner="a" aria-pressed="'+(result==='a')+'">앞 팀 승리</button><button type="button" class="winner-button '+(result==='b'?'selected':'')+'" data-result-key="'+key+'" data-winner="b" aria-pressed="'+(result==='b')+'">뒤 팀 승리</button>':'')+'</div>':'';
-      return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams"><div class="team-wrap'+(result==='a'?' win':'')+'">'+team(m,mi,ri,0,1)+'</div><b class="vs">VS</b><div class="team-wrap'+(result==='b'?' win':'')+'">'+team(m,mi,ri,2,3)+'</div></div>'+resultControls+'</div>';
-    }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>').join('');
+    return d.schedule.map((r,ri)=>{
+      const scored=r.method!=='random';
+      return '<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
+        const key=ri+'-'+mi,result=results[key];
+        let resultControls='';
+        if(!scored)resultControls='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
+        else if(showResults||result)resultControls='<div class="match-result">'+winToggle(key,result,Boolean(d.settledAt)&&!editing)+((result||d.settledAt)?'':'<span class="win-hint">승리한 팀을 눌러주세요</span>')+'</div>';
+        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 코트</div><div class="teams"><div class="team-wrap'+(result==='a'?' win':'')+'">'+team(m,mi,ri,0,1)+'</div><b class="vs">VS</b><div class="team-wrap'+(result==='b'?' win':'')+'">'+team(m,mi,ri,2,3)+'</div></div>'+resultControls+'</div>';
+      }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
+    }).join('');
   }
   async function detail(id,token){
     const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken)return;
-    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+(EDITOR&&!(d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="editPost">수정하기</button><button id="deletePost" class="danger">삭제</button></div>':'')+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,Boolean(EDITOR&&!d.settledAt)))+'</article>';
-    if(EDITOR&&d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('[data-result-key]').forEach(button=>button.onclick=()=>{const next=structuredClone(d);next.results={...(d.results||{}),[button.dataset.resultKey]:button.dataset.winner};editSchedule(next);window.scrollTo(0,0);});
+    const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
+    const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt);
+    const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button><button id="deletePost" class="danger">삭제</button></div>':'';
+    const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt&&allScoredDone)?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 종료</button></div>':'';
+    const mvpCls=(d.kind==='schedule'&&d.settledAt&&Array.isArray(d.mvp)&&d.mvp.length)?' class="mvp-title"':'';
+    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1'+mvpCls+'>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';
+    if(d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('.win-side:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn));
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
+    if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
   function editSchedule(d){
     startDraft(d);draft.results=draft.results||{};
-    const settleButton=d.version&&!d.settledAt?'<button id="settlePost" class="primary">점수 반영 및 확정</button>':'';
-    app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">각 코트의 앞 팀 또는 뒤 팀 승리를 선택한 뒤 대진·승패를 저장하세요. 모든 경기 결과를 입력하면 점수 반영 및 확정으로 출석·승패 점수를 한 번만 누적합니다.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button>'+settleButton+'<button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
+    app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수 자리는 드롭다운으로 바꿀 수 있어요. 승패 기록과 대진 종료(점수 확정)는 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
     $('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};
     $('editMatches').onclick=e=>{
       const button=e.target.closest('[data-result-key]');if(!button)return;
@@ -120,7 +137,6 @@ export function client(EDITOR){
     };
     $('changeParticipants').onclick=()=>openPicker(draft);
     $('savePost').onclick=save;
-    if($('settlePost'))$('settlePost').onclick=settle;
     $('cancelEdit').onclick=cancelEdit;
   }
   function editNotice(d){startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
@@ -134,12 +150,25 @@ export function client(EDITOR){
     try{await persistDraft();draft=null;message('저장되었습니다. 게시판에서 언제든 다시 볼 수 있어요.');if(location.hash==='#home'||!location.hash)route();else location.hash='#home';}
     catch(e){message(e.message,true);}finally{saving=false;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);}
   }
-  async function settle(){
-    if(saving||!draft||draft.version<1)return;
-    saving=true;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=true);message('승패를 저장하고 점수를 반영하는 중…');
-    try{const saved=await persistDraft();const {data}=await api('/api/posts/'+saved.id+'/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:saved.version,operation:crypto.randomUUID()})});draft=null;dirty=false;message('점수 반영이 완료되었습니다. 시드현황에 새 순위가 반영됩니다.');location.hash='#post/'+data.id;}
-    catch(e){message(e.message,true);}finally{saving=false;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);}
+  async function recordResult(d,btn){
+    const key=btn.dataset.resultKey,winner=btn.dataset.winner,toggle=btn.closest('.win-toggle'),matchEl=btn.closest('.match');
+    const prev=d.results?.[key];if(prev===winner)return;
+    applyToggle(toggle,winner);
+    if(matchEl){matchEl.classList.remove('result-a','result-b');matchEl.classList.add('has-result','result-'+winner);const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',winner==='a');if(wraps[1])wraps[1].classList.toggle('win',winner==='b');}
+    const box=toggle?toggle.parentElement:null,hint=box?box.querySelector('.win-hint'):null;if(hint)hint.remove();
+    d.results={...(d.results||{}),[key]:winner};
+    try{await saveResult(d.id,key,winner);if(EDITOR){routeToken++;detail(d.id,routeToken);}}
+    catch(e){if(prev){d.results[key]=prev;applyToggle(toggle,prev);}else{delete d.results[key];applyToggle(toggle,null);if(matchEl){matchEl.classList.remove('has-result','result-a','result-b');matchEl.querySelectorAll('.team-wrap').forEach(w=>w.classList.remove('win'));}}message(e.message||'승패를 저장하지 못했어요.',true);}
   }
+  function applyToggle(t,w){if(!t)return;t.classList.remove('is-a','is-b');if(w)t.classList.add('is-'+w);t.querySelectorAll('.win-side').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.winner===w)));}
+  async function saveResult(id,key,winner){let last;for(let i=0;i<3;i++){try{return await api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}catch(e){last=e;if(i<2&&/다른 기기/.test(e.message||'')){await new Promise(r=>setTimeout(r,250));continue;}throw e;}}throw last;}
+  async function endMatch(d){
+    if(!(await confirmDialog('정말 확정하시겠습니까? 확정하면 출석·승패 점수가 시드현황에 반영되고 되돌릴 수 없습니다.')))return;
+    if(saving)return;saving=true;message('점수를 반영하는 중…');
+    try{const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;await api('/api/posts/'+encodeURIComponent(d.id)+'/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:fresh.version,operation:crypto.randomUUID()})});message('점수 반영이 완료되었습니다. 시드현황에 새 순위가 반영됩니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}
+    catch(e){message(e.message,true);}finally{saving=false;}
+  }
+  function confirmDialog(msg){return new Promise(resolve=>{let done=false;const finish=v=>{if(done)return;done=true;try{dialog.close();}catch(e){}resolve(v);};dialog.innerHTML='<div class="confirm-box"><p class="confirm-msg">'+esc(msg)+'</p><div class="confirm-actions"><button id="confirmNo">아니오</button><button id="confirmYes" class="primary">예</button></div></div>';$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.addEventListener('cancel',()=>finish(false),{once:true});dialog.showModal();});}
   function generate(roster,courts,rounds,methods){
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const pts=p=>Number.isFinite(p.points)?p.points:0;
@@ -162,7 +191,7 @@ export function client(EDITOR){
         const s=[...group].sort((a,b)=>pts(b)-pts(a));
         return [s[0].name,s[3].name,s[1].name,s[2].name]; // 균형: (최고+최저) vs (중간 둘), 앞2=A팀 뒤2=B팀
       });
-      out.push({round:r+1,g,rest:resting.map(p=>p.name)});
+      out.push({round:r+1,method,g,rest:resting.map(p=>p.name)});
     }
     return out;
   }

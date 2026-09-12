@@ -40,9 +40,12 @@ function validate(d,kind){
     if(!Array.isArray(r.g)||r.g.length!==Math.min(d.courts,Math.floor(d.names.length/4))||r.g.some(m=>!Array.isArray(m)||m.length!==4))throw Error('대진 구성을 확인해주세요.');
     const playing=r.g.flat();
     if(playing.some(n=>!d.names.includes(n))||new Set(playing).size!==playing.length)throw Error('같은 라운드에 한 참가자가 중복 배치되었습니다.');
-    return {round:i+1,g:r.g,rest:d.names.filter(n=>!playing.includes(n))};
+    const method=['same','balanced','random'].includes(r.method)?r.method:'balanced';
+    return {round:i+1,method,g:r.g,rest:d.names.filter(n=>!playing.includes(n))};
   });
-  return {title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,results:cleanResults(d.results,schedule),settledAt:null};
+  const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,results:cleanResults(d.results,schedule),settledAt:null};
+  if(Array.isArray(d.mvp))base.mvp=d.mvp.filter(x=>typeof x==='string').slice(0,50);
+  return base;
 }
 async function settleSchedule(db,id,input){
   const row=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
@@ -52,8 +55,9 @@ async function settleSchedule(db,id,input){
   if(post.settledAt)return json({data:post});
   if(row.version!==input.version)return json({error:'최신 대진표를 다시 불러온 뒤 점수를 반영해주세요.'},409);
   const results=cleanResults(post.results,post.schedule);
+  const isScored=ri=>post.schedule[ri]?.method!=='random';
   const missing=[];
-  for(let ri=0;ri<post.schedule.length;ri++)for(let mi=0;mi<post.schedule[ri].g.length;mi++)if(!validResult(results[`${ri}-${mi}`]))missing.push(`${ri+1}라운드 ${mi+1}번 코트`);
+  for(let ri=0;ri<post.schedule.length;ri++){if(!isScored(ri))continue;for(let mi=0;mi<post.schedule[ri].g.length;mi++)if(!validResult(results[`${ri}-${mi}`]))missing.push(`${ri+1}라운드 ${mi+1}번 코트`);}
   if(missing.length)return json({error:`승패를 모두 입력해주세요. 미입력: ${missing.join(', ')}`},400);
   const rankingRows=(await db.prepare('SELECT * FROM ranking_members ORDER BY rank ASC').all()).results;
   if(!rankingRows.length)return json({error:'회원 점수표를 준비하지 못했습니다.'},503);
@@ -64,14 +68,23 @@ async function settleSchedule(db,id,input){
   const memberIdForName=(name,index)=>{const participantId=Array.isArray(post.participantIds)?post.participantIds[index]:'';return byId.has(participantId)?participantId:byName.get(name)||null;};
   const idsByName=new Map(post.names.map((name,index)=>[name,memberIdForName(name,index)]));
   for(const memberId of new Set(idsByName.values()))if(memberId)add(memberId,'attendance');
-  for(let ri=0;ri<post.schedule.length;ri++)for(let mi=0;mi<post.schedule[ri].g.length;mi++){
-    const match=post.schedule[ri].g[mi],winner=results[`${ri}-${mi}`];
-    const winners=winner==='a'?match.slice(0,2):match.slice(2,4),losers=winner==='a'?match.slice(2,4):match.slice(0,2);
-    for(const name of winners){const memberId=idsByName.get(name);if(memberId)add(memberId,'wins');}
-    for(const name of losers){const memberId=idsByName.get(name);if(memberId)add(memberId,'losses');}
+  const scoredPlayed=new Map(),scoredLost=new Set();
+  for(let ri=0;ri<post.schedule.length;ri++){
+    if(!isScored(ri))continue;
+    for(let mi=0;mi<post.schedule[ri].g.length;mi++){
+      const match=post.schedule[ri].g[mi],winner=results[`${ri}-${mi}`];
+      const winners=winner==='a'?match.slice(0,2):match.slice(2,4),losers=winner==='a'?match.slice(2,4):match.slice(0,2);
+      for(const name of winners){const memberId=idsByName.get(name);if(memberId)add(memberId,'wins');}
+      for(const name of losers){const memberId=idsByName.get(name);if(memberId)add(memberId,'losses');}
+      for(const name of match)scoredPlayed.set(name,(scoredPlayed.get(name)||0)+1);
+      for(const name of losers)scoredLost.add(name);
+    }
   }
+  const mvpNames=[...scoredPlayed.keys()].filter(name=>!scoredLost.has(name)&&idsByName.get(name)).sort((a,b)=>(byId.get(idsByName.get(a))?.rank||9999)-(byId.get(idsByName.get(b))?.rank||9999));
+  const mvpDate=new Date(post.createdAt).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric'});
+  const mvpTitle=mvpNames.length?`${mvpDate} 정모의 MVP ${mvpNames.join(' · ')}`:post.title;
   const nextRows=orderRankingRows(rankingRows.map(row=>{const delta=deltas.get(row.member_id)||{attendance:0,wins:0,losses:0,points:0};return {...row,points:row.points+delta.points,attendance:row.attendance+delta.attendance,wins:row.wins+delta.wins,losses:row.losses+delta.losses};}));
-  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at};
+  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:mvpTitle};
   const statements=[
     db.prepare('INSERT INTO ranking_settlements (schedule_id,settled_at,operation) VALUES (?,?,?)').bind(id,at,input.operation),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version)
@@ -107,6 +120,14 @@ export default {async fetch(request,env){
         const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
         return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate});
       }
+      if(path==='/api/mvp'&&request.method==='GET'){
+        const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC LIMIT 1').first();
+        if(!last)return json({mvp:[]});
+        const row=await env.DB.prepare("SELECT payload FROM board_posts WHERE id=? AND kind='schedule'").bind(last.schedule_id).first();
+        if(!row)return json({mvp:[]});
+        const p=JSON.parse(row.payload);
+        return json({mvp:Array.isArray(p.mvp)?p.mvp:[],id:last.schedule_id,settledAt:last.settled_at});
+      }
       const settleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/settle$/);
       if(settleMatch){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
@@ -115,6 +136,26 @@ export default {async fetch(request,env){
         let input;try{input=JSON.parse(raw);if(!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('점수 반영 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
         await ensureRankingMembers(env.DB,appPeople);
         return settleSchedule(env.DB,settleMatch[1],input);
+      }
+      const resultMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/result$/);
+      if(resultMatch){
+        if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
+        const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        const rkey=String(input.key||''),winner=input.winner;
+        if(!/^\d{1,3}-\d{1,3}$/.test(rkey)||!validResult(winner))return json({error:'승패 정보를 확인해주세요.'},400);
+        const row=await env.DB.prepare("SELECT * FROM board_posts WHERE id=? AND kind='schedule'").bind(resultMatch[1]).first();
+        if(!row)return json({error:'대진표를 찾을 수 없습니다.'},404);
+        const post=unpack(row);
+        if(post.settledAt)return json({error:'이미 점수가 반영된 대진표는 변경할 수 없습니다.'},409);
+        const ri=Number(rkey.split('-')[0]),mi=Number(rkey.split('-')[1]),round=post.schedule[ri];
+        if(!round||!Array.isArray(round.g?.[mi])||round.g[mi].length!==4)return json({error:'없는 경기입니다.'},400);
+        if(round.method==='random')return json({error:'랜덤 경기는 승패를 기록하지 않습니다.'},400);
+        const merged={...post,results:{...(post.results||{}),[rkey]:winner}};
+        const at=new Date().toISOString();
+        const upd=await env.DB.prepare("UPDATE board_posts SET payload=?,version=version+1,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(merged),at,resultMatch[1],row.version).run();
+        if(!upd.meta.changes)return json({error:'다른 기기에서 먼저 기록했어요. 잠시 후 다시 눌러주세요.',conflict:true},409);
+        return json({data:{key:rkey,winner,version:row.version+1}});
       }
       // Old tabs must reload rather than overwrite the new archive.
       if(path==='/api/schedule'){
