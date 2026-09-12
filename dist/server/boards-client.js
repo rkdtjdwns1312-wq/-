@@ -76,7 +76,7 @@ export function client(EDITOR){
       try{const x=await api('/api/posts?kind='+kind+'&offset='+offset);if(token!==routeToken)return;
         if(!offset)$('postList').innerHTML='';
         if(!offset&&!x.items.length)$('postList').innerHTML='<div class="empty"><img src="/mascot-rest.png" alt="기다리는 콕끼리"><p>아직 등록된 '+(kind==='schedule'?'대진표':'공지사항')+'가 없습니다.</p></div>';
-        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post'+(kind==='notice'?' post-notice':'')+'" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':'')+'<div class="post-title">'+esc(p.title)+'</div>'+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
+        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post'+((kind==='notice'||kind==='schedule')?' post-notice':'')+'" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':kind==='schedule'?'<span class="post-label post-label-alt">대진</span>':'')+'<div class="post-title">'+esc(p.title)+'</div>'+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
         offset+=x.items.length;button.hidden=!x.hasMore;
       }catch(e){if(token===routeToken){message(e.message,true);button.hidden=false;button.textContent='다시 불러오기';}}finally{button.disabled=false;}
     }
@@ -180,7 +180,7 @@ export function client(EDITOR){
       const n=Math.max(1,Math.min(20,Number($('rounds').value)||1));
       if(methods.length<n)while(methods.length<n)methods.push('random');
       if(methods.length>n)methods=methods.slice(0,n);
-      $('roundMethods').innerHTML='<div class="rm-title">라운드별 매칭 방식</div>'+methods.map((mth,i)=>'<div class="rm-row"><span class="rm-round">'+(i+1)+'R</span><div class="rm-opts">'+methodLabels.map(([v,l])=>'<button type="button" class="rm-btn'+(mth===v?' on':'')+'" data-r="'+i+'" data-v="'+v+'">'+l+'</button>').join('')+'</div></div>').join('');
+      $('roundMethods').innerHTML='<div class="rm-title">라운드별 매칭 방식</div>'+methods.map((mth,i)=>'<div class="rm-row"><span class="rm-round">'+(i+1)+'R</span><div class="rm-opts" role="group" aria-label="'+(i+1)+'라운드 매칭 방식">'+methodLabels.map(([v,l])=>'<button type="button" class="rm-btn'+(mth===v?' on':'')+'" data-r="'+i+'" data-v="'+v+'" aria-pressed="'+(mth===v)+'">'+l+'</button>').join('')+'</div></div>').join('');
     }
     $('choices').onchange=e=>{if(e.target.checked)selected.add(e.target.value);else selected.delete(e.target.value);count();};
     $('choices').addEventListener('click',e=>{const b=e.target.closest('.late-btn');if(!b)return;e.preventDefault();const id=b.dataset.id;if(lateIds.has(id))lateIds.delete(id);else lateIds.add(id);b.classList.toggle('on');b.setAttribute('aria-pressed',String(lateIds.has(id)));});
