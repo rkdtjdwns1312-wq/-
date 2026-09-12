@@ -7,6 +7,12 @@
   "main": "dist/server/index.js",
   // Cloudflare가 이 날짜 기준의 최신 동작 방식을 사용하게 하는 값(바꿀 필요 없음)
   "compatibility_date": "2025-09-01",
+  // 반드시 false로 둔다. 서버가 회원 화면용 스크립트를 client.toString()으로 페이지에 넣는데,
+  // true(기본값)면 번들러가 함수 안에 __name(...) 보조 호출을 끼워 넣어 브라우저에서
+  // "__name is not defined" 오류로 화면이 비어 보인다(2026-09-12 첫 배포에서 발생).
+  "keep_names": false,
+  // 기본 주소 https://kokkiri.<계정 하위도메인>.workers.dev 를 켠다
+  "workers_dev": true,
   // 이미지 등 정적 파일을 올려두는 폴더(Workers Static Assets)
   "assets": { "directory": "./public" },
   // 이 사이트가 쓰는 D1 데이터베이스 연결 정보
