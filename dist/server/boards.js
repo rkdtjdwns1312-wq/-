@@ -84,13 +84,39 @@ async function settleSchedule(db,id,input){
   const mvpDate=new Date(post.createdAt).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric'});
   const mvpTitle=mvpNames.length?`${mvpDate} 정모의 MVP ${mvpNames.join(' · ')}`:post.title;
   const nextRows=orderRankingRows(rankingRows.map(row=>{const delta=deltas.get(row.member_id)||{attendance:0,wins:0,losses:0,points:0};return {...row,points:row.points+delta.points,attendance:row.attendance+delta.attendance,wins:row.wins+delta.wins,losses:row.losses+delta.losses};}));
-  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:mvpTitle};
+  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:mvpTitle,preTitle:post.title};
   const statements=[
     db.prepare('INSERT INTO ranking_settlements (schedule_id,settled_at,operation) VALUES (?,?,?)').bind(id,at,input.operation),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version)
   ];
   for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,byId.get(next.member_id).rank,next.attendance,next.wins,next.losses,at,next.member_id));
   for(const [memberId,delta] of deltas){const before=byId.get(memberId),after=nextRows.find(row=>row.member_id===memberId);statements.push(db.prepare('INSERT INTO ranking_events (schedule_id,member_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,rank_before,rank_after,seed_before,seed_after,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,memberId,delta.attendance,delta.wins,delta.losses,delta.points,before.points,after.points,before.rank,after.rank,before.seed,after.seed,at));}
+  await db.batch(statements);
+  const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
+  return json({data:unpack(saved)});
+}
+// 요청 053: 마감 취소 — 가장 최근에 마감한 대진표의 정산을 되돌린다. ranking_events의 델타를 역산해 점수·출석·승·패를 원복하고, 순위·시드를 다시 계산, settledAt·MVP 제거, 제목 복원, 정산·이벤트 기록 삭제.
+async function unsettleSchedule(db,id){
+  const row=await db.prepare("SELECT * FROM board_posts WHERE id=? AND kind='schedule'").bind(id).first();
+  if(!row)return json({error:'대진표를 찾을 수 없습니다.'},404);
+  const post=unpack(row);
+  if(!post.settledAt)return json({error:'아직 마감되지 않은 대진표입니다.'},400);
+  const latest=await db.prepare('SELECT schedule_id FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
+  if(!latest||latest.schedule_id!==id)return json({error:'가장 최근에 마감한 대진표만 마감을 취소할 수 있어요.'},409);
+  const events=(await db.prepare('SELECT * FROM ranking_events WHERE schedule_id=?').bind(id).all()).results;
+  const rankingRows=(await db.prepare('SELECT * FROM ranking_members ORDER BY rank ASC').all()).results;
+  const reverted=rankingRows.map(r=>({...r}));
+  const revById=new Map(reverted.map(r=>[r.member_id,r]));
+  for(const ev of events){const r=revById.get(ev.member_id);if(!r)continue;r.points-=ev.total_points;r.attendance=Math.max(0,r.attendance-ev.attendance_points);r.wins=Math.max(0,r.wins-ev.win_points);r.losses=Math.max(0,r.losses-ev.loss_points);}
+  const nextRows=orderRankingRows(reverted);
+  const at=new Date().toISOString();
+  const nextPayload={...post,settledAt:null,mvp:[],title:post.preTitle||post.title};delete nextPayload.preTitle;
+  const statements=[
+    db.prepare('DELETE FROM ranking_events WHERE schedule_id=?').bind(id),
+    db.prepare('DELETE FROM ranking_settlements WHERE schedule_id=?').bind(id),
+    db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation='unsettle',updated_at=? WHERE id=? AND kind='schedule'").bind(JSON.stringify(nextPayload),at,id)
+  ];
+  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,next.rank,next.attendance,next.wins,next.losses,at,next.member_id));
   await db.batch(statements);
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
@@ -121,7 +147,7 @@ export default {async fetch(request,env){
         return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate});
       }
       if(path==='/api/mvp'&&request.method==='GET'){
-        const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC LIMIT 1').first();
+        const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
         if(!last)return json({mvp:[]});
         const row=await env.DB.prepare("SELECT payload FROM board_posts WHERE id=? AND kind='schedule'").bind(last.schedule_id).first();
         if(!row)return json({mvp:[]});
@@ -136,6 +162,13 @@ export default {async fetch(request,env){
         let input;try{input=JSON.parse(raw);if(!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('점수 반영 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
         await ensureRankingMembers(env.DB,appPeople);
         return settleSchedule(env.DB,settleMatch[1],input);
+      }
+      const unsettleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/unsettle$/);
+      if(unsettleMatch){
+        if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 마감을 취소할 수 있습니다.'},403);
+        await ensureRankingMembers(env.DB,appPeople);
+        return unsettleSchedule(env.DB,unsettleMatch[1]);
       }
       const resultMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/result$/);
       if(resultMatch){
@@ -168,7 +201,7 @@ export default {async fetch(request,env){
         if(!['schedule','notice'].includes(kind))return json({error:'게시판을 확인해주세요.'},400);
         await preserveLegacy(env.DB);
         const offset=Math.max(0,Math.min(1000000,Math.floor(Number(url.searchParams.get('offset')))||0));
-        const {results}=await env.DB.prepare('SELECT id,kind,json_extract(payload,\'$.title\') AS title,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
+        const {results}=await env.DB.prepare('SELECT id,kind,json_extract(payload,\'$.title\') AS title,json_extract(payload,\'$.settledAt\') AS settledAt,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
         return json({items:results.slice(0,30),hasMore:results.length>30});
       }
       const match=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})$/);

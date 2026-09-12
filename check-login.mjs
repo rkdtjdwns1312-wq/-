@@ -76,6 +76,14 @@ assert.ok(w2data.settledAt);
 const mvpApi=await (await worker.fetch(new Request(origin+'/api/mvp'),env)).json();
 assert.equal(mvpApi.id,'wave2-test');assert.deepEqual([...mvpApi.mvp].sort(),['구구','시오']);assert.ok(mvpApi.settledAt);
 assert.equal((await postResult({key:'0-0',winner:'b'})).status,409);
+// 요청 053: 마감 취소(가장 최근 마감 되돌리기)
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST'}),env)).status,403);
+const beforeUn=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,upBp=n=>beforeUn.find(r=>r.name===n).points;
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
+const w2after=await getW2();assert.equal(w2after.settledAt,null);assert.deepEqual(w2after.mvp,[]);assert.ok(!(w2after.title||'').includes('MVP'));
+const afterUn=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,unAp=n=>afterUn.find(r=>r.name===n).points;
+assert.equal(upBp('시오')-unAp('시오'),2);assert.equal(upBp('구구')-unAp('구구'),2);
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,400);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/test',{method:'PUT',body:'{}'}),env)).status,403);
 assert.equal((await worker.fetch(new Request(origin+'/operate-'+env.EDITOR_KEY),env)).status,200);
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-login',{method:'GET'}),env)).status,405);
