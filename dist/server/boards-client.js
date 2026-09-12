@@ -62,7 +62,7 @@ export function client(EDITOR){
     closeList();
     return parts.join('');
   }
-  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home';
+  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1;
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
   async function getPeople(){if(!people.length)people=(await api('/api/people')).people;return people;}
@@ -93,9 +93,12 @@ export function client(EDITOR){
       ? '<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'코트 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===m[si]?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'
       : '<span class="player">'+nameHTML(m[si])+'</span>';
     const team=(m,mi,ri,a,b)=>'<div class="team">'+cell(m,mi,ri,a)+'<span class="team-amp">·</span>'+cell(m,mi,ri,b)+'</div>';
-    return d.schedule.map((r,ri)=>{
+    const multi=!editing&&d.schedule.length>1;
+    const vr=multi?Math.min(Math.max(1,viewRound),d.schedule.length):0;
+    const tabs=multi?'<div class="round-tabs" role="tablist" aria-label="라운드 선택">'+d.schedule.map((r,ri)=>'<button type="button" class="round-tab'+((ri+1)===vr?' on':'')+'" data-round-tab="'+(ri+1)+'" aria-selected="'+((ri+1)===vr)+'">'+esc(r.round)+'R</button>').join('')+'</div>':'';
+    return tabs+d.schedule.map((r,ri)=>{
       const scored=r.method!=='random';
-      return '<section class="round"><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
+      return '<section class="round" data-round-panel="'+(ri+1)+'"'+(multi&&(ri+1)!==vr?' hidden':'')+'><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
         const key=ri+'-'+mi,result=results[key];
         const showWin=scored&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
         const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+(result===side?' win':'')+'">'+team(m,mi,ri,a,b)+'</div>';
@@ -119,6 +122,7 @@ export function client(EDITOR){
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
+    const rtabs=app.querySelector('.round-tabs');if(rtabs)rtabs.onclick=e=>{const b=e.target.closest('.round-tab');if(!b)return;viewRound=+b.dataset.roundTab;app.querySelectorAll('.round-tab').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on));});app.querySelectorAll('[data-round-panel]').forEach(p=>{p.hidden=(+p.dataset.roundPanel)!==viewRound;});};
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
@@ -249,7 +253,7 @@ export function client(EDITOR){
     $('seedMembers').onclick=()=>{type='member';render();};$('seedGuests').onclick=()=>{type='guest';render();};$('seedSearch').oninput=render;render();
   }
   async function route(){
-    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;app.innerHTML='<p class="empty">불러오는 중…</p>';
+    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;app.innerHTML='<p class="empty">불러오는 중…</p>';
     try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash.startsWith('#post/'))await detail(hash.slice(6),token);else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
   window.addEventListener('hashchange',()=>{if(saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);});
