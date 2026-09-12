@@ -204,6 +204,8 @@ export default {async fetch(request,env){
       const result=input.version===0
         ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(id,input.kind,JSON.stringify(payload),input.operation,at,at).run()
         :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?').bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version).run();
+      // 요청 047: 새 대진(정모)을 만들 때 출석·승·패를 0으로 초기화한다. 점수·시드·순위는 누적 유지.
+      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await ensureRankingMembers(env.DB,appPeople);await env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,updated_at=?').bind(at).run();}
       const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
       if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);

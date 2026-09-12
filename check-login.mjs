@@ -56,6 +56,9 @@ const putW2=(version,data)=>worker.fetch(new Request(origin+'/api/posts/wave2-te
 const postResult=body=>worker.fetch(new Request(origin+'/api/posts/wave2-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),env);
 const getW2=async()=>(await (await worker.fetch(new Request(origin+'/api/posts/wave2-test'),env)).json()).data;
 assert.equal((await putW2(0,wave2)).status,200);
+// 요청 047: 새 대진 생성 시 출석/승/패는 0으로 초기화되고 점수는 누적 유지된다
+const afterCreate=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,sioAC=afterCreate.find(r=>r.name==='시오');
+assert.equal(sioAC.attendance,0);assert.equal(sioAC.wins,0);assert.equal(sioAC.losses,0);assert.equal(sioAC.points,101);
 const w2got=await getW2();assert.equal(w2got.schedule[0].method,'balanced');assert.equal(w2got.schedule[1].method,'random');
 assert.equal((await postResult({key:'1-0',winner:'a'})).status,400);
 assert.equal((await postResult({key:'0-0',winner:'x'})).status,400);
