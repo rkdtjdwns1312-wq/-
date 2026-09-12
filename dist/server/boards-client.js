@@ -32,6 +32,8 @@ export function client(EDITOR){
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
   const crown=name=>OPERATORS.has(name)?'<span class="crown" title="운영진" aria-label="운영진">👑</span>':'';
+  const nameHTML=name=>{const s=String(name??''),m=/^(.*[^\s])\(([^)\s]+)\)$/.exec(s);return m?esc(m[1])+'<span class="region">'+esc(m[2])+'</span>':esc(s);};
+  const seedHTML=seed=>{const s=String(seed==null?'':seed),m=/^(.*[^+\-])([+\-])$/.exec(s);return m?esc(m[1])+'<sup class="seed-mod">'+esc(m[2])+'</sup>':esc(s);};
   const date=s=>new Date(s).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
   const stamp=()=>date(new Date());
   function noticeHTML(body){
@@ -89,7 +91,7 @@ export function client(EDITOR){
     const results=d.results||{};
     const cell=(m,mi,ri,si)=>editing
       ? '<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'코트 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===m[si]?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'
-      : '<span class="player">'+esc(m[si])+'</span>';
+      : '<span class="player">'+nameHTML(m[si])+'</span>';
     const team=(m,mi,ri,a,b)=>'<div class="team">'+cell(m,mi,ri,a)+'<span class="team-amp">·</span>'+cell(m,mi,ri,b)+'</div>';
     return d.schedule.map((r,ri)=>{
       const scored=r.method!=='random';
@@ -203,7 +205,7 @@ export function client(EDITOR){
     dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div><label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing?.title||'')+'" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다"></label><div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div id="roundMethods" class="round-methods"></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><div class="add-guest"><input id="newGuestName" maxlength="100" placeholder="새로 온 게스트 이름"><button type="button" id="addGuest">추가하기</button></div><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">라운드마다 매칭 방식을 고르면 시드 점수를 반영해 대진이 만들어집니다. 동일=점수가 가까운 사람끼리, 인접=실력 균형(강약 섞기), 랜덤=점수 무관. 늦참자는 아래 목록에서 표시하면 쉬는 순서가 조정됩니다.</p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
     const visible=()=>people.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
     const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+people.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+people.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
-    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+esc(p.name)+'</span><small>'+esc(p.seed||'미정')+'</small>'+'<button type="button" class="late-btn'+(lateIds.has(p.id)?' on':'')+'" data-id="'+esc(p.id)+'">늦참</button>'+'</label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
+    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>'<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+nameHTML(p.name)+'</span><small>'+seedHTML(p.seed||'미정')+'</small>'+'<button type="button" class="late-btn'+(lateIds.has(p.id)?' on':'')+'" data-id="'+esc(p.id)+'">늦참</button>'+'</label>').join('')||'<p>검색 결과가 없습니다.</p>';count();}
     const methodLabels=[['same','동일'],['balanced','인접'],['random','랜덤']];
     function renderMethods(){
       const n=Math.max(1,Math.min(20,Number($('rounds').value)||1));
@@ -236,11 +238,11 @@ export function client(EDITOR){
     function render(){
       const term=$('seedSearch').value.trim();$('seedMembers').setAttribute('aria-pressed',String(type==='member'));$('seedGuests').setAttribute('aria-pressed',String(type==='guest'));
       if(type==='member'){
-        const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';const rows=list.map(row=>'<tr><td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+esc(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+esc(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');$('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
+        const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';const rows=list.map(row=>'<tr><td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');$('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));
         const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
-        const rows=list.map(p=>'<tr><td>'+p.rank+'</td><td><span class="muted">-</span></td><td>'+esc(p.name)+'</td><td><span class="seed-badge">'+esc(p.seed||'미정')+'</span></td><td>'+(typeof p.points==='number'?p.points:'-')+'</td><td><span class="muted">-</span></td><td><span class="muted">-</span></td><td><span class="muted">-</span></td></tr>').join('');
+        const rows=list.map(p=>'<tr><td>'+p.rank+'</td><td><span class="muted">-</span></td><td>'+nameHTML(p.name)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td>'+(typeof p.points==='number'?p.points:'-')+'</td><td><span class="muted">-</span></td><td><span class="muted">-</span></td><td><span class="muted">-</span></td></tr>').join('');
         $('seedList').innerHTML=rows?'<p class="seed-note">게스트 점수는 2026년 9월 10일 기준표 값이며, 정모 출석·승패 점수 누적에는 반영되지 않습니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr><th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }
     }

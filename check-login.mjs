@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password'};
 const origin='http://localhost:4173';
@@ -31,6 +31,14 @@ const sio=rankingData.items.find(row=>row.name==='시오'),newMember=rankingData
 const jubam=rankingData.items.find(row=>row.name==='주밤'),roto=rankingData.items.find(row=>row.name==='로토');assert.equal(jubam.points,115);assert.equal(jubam.seed,'A');assert.equal(roto.points,104);assert.equal(roto.seed,'A');
 const peopleData=await (await worker.fetch(new Request(origin+'/api/people'),env)).json();assert.equal(peopleData.people.find(p=>p.name==='주밤').seed,'A');assert.equal(peopleData.people.find(p=>p.name==='로토').seed,'A');
 const guestPeople=peopleData.people.filter(p=>p.type==='guest');assert.equal(guestPeople.length,32);assert.ok(guestPeople.every(p=>Number.isInteger(p.points)));assert.equal(guestPeople.find(p=>p.name==='몽구').points,125);assert.equal(guestPeople.find(p=>p.name==='우니').points,17);
+// 요청 045: 회원 명단의 (부재)·(서울) 표기 제거
+assert.ok(rankingData.items.every(r=>!/\((?:서울|부재)\)/.test(r.name)),'회원 랭킹 이름에 (부재)/(서울)가 없어야 합니다');
+assert.equal(rankingData.items.find(r=>r.name==='덕자').points,60);assert.equal(rankingData.items.find(r=>r.name==='우민').points,40);
+assert.ok(!rankingData.items.some(r=>r.name==='덕자(부재)'||r.name==='우민(부재)'));
+for(const nm of ['민석','민수','호구','우주','윤후'])assert.ok(guestPeople.some(p=>p.name===nm),nm+' 게스트 이름이 정리되어야 합니다');
+// 겹치는 이름은 지역 표기를 남긴다(회색 작은 글씨로 렌더링): 회원 철 vs 게스트 철, 게스트 선호 2명
+assert.ok(guestPeople.some(p=>p.name==='철(서울)'),'겹치는 철은 지역 표기 유지');
+assert.ok(guestPeople.some(p=>p.name==='선호(서울)')&&guestPeople.some(p=>p.name==='선호'),'겹치는 선호는 둘 다 존재');
 const memberPeople=peopleData.people.filter(p=>p.type==='member');assert.ok(memberPeople.every(p=>Number.isInteger(p.points)));assert.equal(memberPeople.find(p=>p.name==='호잇').points,123);
 const schedule={id:'ranking-test',kind:'schedule',version:0,title:'점수 계산 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
 const put=(version,data)=>worker.fetch(new Request(origin+'/api/posts/ranking-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
