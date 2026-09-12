@@ -88,6 +88,18 @@ assert.equal((await worker.fetch(new Request(origin+'/api/posts/test',{method:'P
 assert.equal((await worker.fetch(new Request(origin+'/operate-'+env.EDITOR_KEY),env)).status,200);
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-login',{method:'GET'}),env)).status,405);
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-login',{method:'POST',headers:{origin},body:'{}'}),{})).status,503);
+// 요청 053: 마감 취소(unsettle) — 최근 마감 대진의 정산을 되돌려 점수·출석·승패 원복, settledAt 해제
+const uSched={id:'unsettle-test',kind:'schedule',version:0,title:'마감취소 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:0,operation:crypto.randomUUID(),data:uSched})}),env)).status,200);
+const uPre=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오').points;
+await worker.fetch(new Request(origin+'/api/posts/unsettle-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'0-0',winner:'a'})}),env);
+const uv=(await (await worker.fetch(new Request(origin+'/api/posts/unsettle-test'),env)).json()).data.version;
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:uv,operation:'u-settle'})}),env)).status,200);
+const uSet=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uSet.points,uPre+2);assert.equal(uSet.attendance,1);assert.equal(uSet.wins,1);
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/unsettle',{method:'POST'}),env)).status,403);
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
+const uRev=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uRev.points,uPre);assert.equal(uRev.attendance,0);assert.equal(uRev.wins,0);
+assert.equal((await (await worker.fetch(new Request(origin+'/api/posts/unsettle-test'),env)).json()).data.settledAt,null);
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
