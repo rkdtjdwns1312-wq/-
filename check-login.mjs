@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password'};
 const origin='http://localhost:4173';
@@ -40,6 +40,19 @@ for(const nm of ['민석','민수','호구','우주','윤후'])assert.ok(guestPe
 assert.ok(guestPeople.some(p=>p.name==='철(서울)'),'겹치는 철은 지역 표기 유지');
 assert.ok(guestPeople.some(p=>p.name==='선호(서울)')&&guestPeople.some(p=>p.name==='선호'),'겹치는 선호는 둘 다 존재');
 const memberPeople=peopleData.people.filter(p=>p.type==='member');assert.ok(memberPeople.every(p=>Number.isInteger(p.points)));assert.equal(memberPeople.find(p=>p.name==='호잇').points,123);
+// 요청 060: 시드현황 사람 추가/삭제(회원·게스트)
+const addP=(name,type,points,key=env.EDITOR_KEY)=>worker.fetch(new Request(origin+'/api/people',{method:'POST',headers:{'content-type':'application/json',...(key?{'x-kokkiri-editor':key}:{})},body:JSON.stringify({name,type,points})}),env);
+assert.equal((await addP('추가회원','member',55,null)).status,403);
+const addM=await addP('추가회원','member',55);assert.equal(addM.status,200);const addMId=(await addM.json()).data.id;
+const rkA=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();assert.equal(rkA.items.length,62);assert.ok(rkA.items.some(r=>r.name==='추가회원'&&r.seed==='D+'));
+assert.equal((await addP('추가회원','member',10)).status,409);
+const addG=await addP('추가게스트','guest',30);assert.equal(addG.status,200);const addGId=(await addG.json()).data.id;
+const ppA=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.ok(ppA.some(p=>p.name==='추가게스트'&&p.type==='guest'&&p.seed==='E+'));assert.equal(ppA.filter(p=>p.type==='guest').length,33);
+assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({ids:[addMId,addGId]})}),env)).status,200);
+const rkB=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();assert.equal(rkB.items.length,61);assert.ok(!rkB.items.some(r=>r.name==='추가회원'));
+assert.ok(rkB.items.map(r=>r.rank).every((v,i)=>v===i+1),'삭제 후에도 회원 순위가 1..N 연속이어야 합니다');
+const ppB=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.equal(ppB.filter(p=>p.type==='guest').length,32);assert.equal(ppB.filter(p=>p.type==='member').length,61);
+assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST'}),env)).status,403);
 const schedule={id:'ranking-test',kind:'schedule',version:0,title:'점수 계산 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
 const put=(version,data)=>worker.fetch(new Request(origin+'/api/posts/ranking-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
 assert.equal((await put(0,schedule)).status,200);schedule.version=1;schedule.results={'0-0':'a'};const saved=await put(1,schedule);assert.equal(saved.status,200);const savedData=(await saved.json()).data;const settled=await worker.fetch(new Request(origin+'/api/posts/ranking-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:savedData.version,operation:'settle-test'})}),env);assert.equal(settled.status,200);const settledData=(await settled.json()).data;assert.equal(settledData.settledAt!==undefined,true);const afterRankings=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();const after=afterRankings.items;assert.equal(afterRankings.updatedDate,new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}));assert.equal(after.find(row=>row.name==='시오').points,101);assert.equal(after.find(row=>row.name==='구구').points,90);assert.equal(after.find(row=>row.name==='구름').points,89);assert.equal(after.find(row=>row.name==='백구').points,88);assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ranking_events').get().count,4);assert.equal((await worker.fetch(new Request(origin+'/api/posts/ranking-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:settledData.version,operation:'settle-again'})}),env)).status,200);

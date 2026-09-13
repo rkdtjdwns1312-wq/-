@@ -6,6 +6,12 @@ import { operatorLogin } from './operator-login.js';
 import { ensureRankingMembers, orderRankingRows, rankingOnlyPeople, seedForPoints } from './rankings.js';
 
 const appPeople=[...people,...rankingOnlyPeople(people)];
+const appGuests=appPeople.filter(p=>p.type==='guest');
+// 정적 게스트(roster.js)를 guests 테이블에 1회 시드한다(요청 060). 이미 있으면 건너뜀.
+async function ensureGuests(db){
+  if(!appGuests.length)return;
+  await db.batch(appGuests.map(g=>db.prepare('INSERT OR IGNORE INTO guests (guest_id,name,points,hidden,created_at) VALUES (?,?,?,0,?)').bind(g.id,g.name,Number.isFinite(g.points)?g.points:0,'2026-09-10T00:00:00.000Z')));
+}
 
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
@@ -59,7 +65,7 @@ async function settleSchedule(db,id,input){
   const missing=[];
   for(let ri=0;ri<post.schedule.length;ri++){if(!isScored(ri))continue;for(let mi=0;mi<post.schedule[ri].g.length;mi++)if(!validResult(results[`${ri}-${mi}`]))missing.push(`${ri+1}라운드 ${mi+1}번 코트`);}
   if(missing.length)return json({error:`승패를 모두 입력해주세요. 미입력: ${missing.join(', ')}`},400);
-  const rankingRows=(await db.prepare('SELECT * FROM ranking_members ORDER BY rank ASC').all()).results;
+  const rankingRows=(await db.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results;
   if(!rankingRows.length)return json({error:'회원 점수표를 준비하지 못했습니다.'},503);
   const byId=new Map(rankingRows.map(row=>[row.member_id,row]));
   const byName=new Map(rankingRows.map(row=>[row.name,row.member_id]));
@@ -104,7 +110,7 @@ async function unsettleSchedule(db,id){
   const latest=await db.prepare('SELECT schedule_id FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
   if(!latest||latest.schedule_id!==id)return json({error:'가장 최근에 마감한 대진표만 마감을 취소할 수 있어요.'},409);
   const events=(await db.prepare('SELECT * FROM ranking_events WHERE schedule_id=?').bind(id).all()).results;
-  const rankingRows=(await db.prepare('SELECT * FROM ranking_members ORDER BY rank ASC').all()).results;
+  const rankingRows=(await db.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results;
   const reverted=rankingRows.map(r=>({...r}));
   const revById=new Map(reverted.map(r=>[r.member_id,r]));
   for(const ev of events){const r=revById.get(ev.member_id);if(!r)continue;r.points-=ev.total_points;r.attendance=Math.max(0,r.attendance-ev.attendance_points);r.wins=Math.max(0,r.wins-ev.win_points);r.losses=Math.max(0,r.losses-ev.loss_points);}
@@ -132,19 +138,58 @@ export default {async fetch(request,env){
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({people:appPeople});
     await ensureRankingMembers(env.DB,appPeople);
-    const {results}=await env.DB.prepare('SELECT member_id,seed,points FROM ranking_members').all(),info=new Map(results.map(row=>[row.member_id,row]));
-    return json({people:appPeople.map(person=>info.has(person.id)?{...person,seed:info.get(person.id).seed,points:info.get(person.id).points}:person)});
+    await ensureGuests(env.DB);
+    const members=(await env.DB.prepare('SELECT member_id,name,seed,points FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:r.seed,points:r.points}));
+    const guests=(await env.DB.prepare('SELECT guest_id,name,points FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points}));
+    return json({people:[...members,...guests]});
   }
   if(path.startsWith('/api/')){
     try{
       if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
         await ensureRankingMembers(env.DB,appPeople);
-        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at FROM ranking_members ORDER BY rank ASC').all();
+        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
         const sourceDate='2026-09-10';
         const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
         const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
         return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate});
+      }
+      if(path==='/api/people'&&request.method==='POST'){
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 추가할 수 있습니다.'},403);
+        const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        const name=String(input.name||'').trim(),type=input.type,points=Math.round(Number(input.points));
+        if(!name||name.length>100)return json({error:'닉네임을 확인해주세요.'},400);
+        if(type!=='member'&&type!=='guest')return json({error:'회원 또는 게스트를 선택해주세요.'},400);
+        if(!Number.isInteger(points)||points<0||points>1000)return json({error:'시드 점수는 0~1000 사이 숫자로 입력해주세요.'},400);
+        await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
+        const at=new Date().toISOString();
+        if(type==='member'){
+          const dup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
+          if(dup)return json({error:'같은 이름의 회원이 이미 있어요. 다른 이름을 써주세요.'},409);
+          const id='custom-m-'+crypto.randomUUID();
+          await env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,at).run();
+          const rows=(await env.DB.prepare('SELECT * FROM ranking_members WHERE hidden=0').all()).results;
+          await env.DB.batch(orderRankingRows(rows).map(r=>env.DB.prepare('UPDATE ranking_members SET rank=?,previous_rank=? WHERE member_id=?').bind(r.rank,r.rank,r.member_id)));
+          return json({data:{id,name,type,points,seed:seedForPoints(points)}});
+        }
+        const gid='custom-g-'+crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO guests (guest_id,name,points,hidden,created_at) VALUES (?,?,?,0,?)').bind(gid,name,points,at).run();
+        return json({data:{id:gid,name,type,points,seed:seedForPoints(points)}});
+      }
+      if(path==='/api/people/hide'&&request.method==='POST'){
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
+        const raw=await request.text();if(raw.length>8000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        const ids=Array.isArray(input.ids)?input.ids.filter(x=>typeof x==='string'&&x.length<=100).slice(0,300):[];
+        if(!ids.length)return json({error:'삭제할 사람을 선택해주세요.'},400);
+        await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
+        const at=new Date().toISOString(),stmts=[];
+        for(const id of ids){stmts.push(env.DB.prepare('UPDATE ranking_members SET hidden=1,updated_at=? WHERE member_id=?').bind(at,id));stmts.push(env.DB.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').bind(id));}
+        await env.DB.batch(stmts);
+        const remain=(await env.DB.prepare('SELECT * FROM ranking_members WHERE hidden=0').all()).results;
+        await env.DB.batch(orderRankingRows(remain).map(r=>env.DB.prepare('UPDATE ranking_members SET rank=?,previous_rank=? WHERE member_id=?').bind(r.rank,r.rank,r.member_id)));
+        return json({data:{hidden:ids.length}});
       }
       if(path==='/api/mvp'&&request.method==='GET'){
         const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
