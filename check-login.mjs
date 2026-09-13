@@ -90,7 +90,7 @@ assert.equal(w2settled.status,200);const w2data=(await w2settled.json()).data;
 const afterW=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,ap=n=>afterW.find(r=>r.name===n).points;
 assert.equal(ap('시오')-sB,2);assert.equal(ap('구구')-gB,2);assert.equal(ap('구름')-rB,0);assert.equal(ap('백구')-bB,0);
 assert.deepEqual([...w2data.mvp].sort(),['구구','시오']);
-assert.ok(w2data.title.includes('MVP')&&w2data.title.includes('시오')&&w2data.title.includes('구구'));
+assert.equal(w2data.title,'웨이브2 테스트');assert.deepEqual([...w2data.mvp].sort(),['구구','시오']);// 요청 078: 마감해도 제목은 그대로, MVP는 mvp[]로만
 assert.ok(w2data.settledAt);
 const mvpApi=await (await worker.fetch(new Request(origin+'/api/mvp'),env)).json();
 assert.equal(mvpApi.id,'wave2-test');assert.deepEqual([...mvpApi.mvp].sort(),['구구','시오']);assert.ok(mvpApi.settledAt);

@@ -96,11 +96,10 @@ async function settleSchedule(db,id,input){
   }
   // MVP는 회원만(게스트 제외 — 요청 039 유지).
   const mvpNames=[...scoredPlayed.keys()].filter(name=>!scoredLost.has(name)&&whoByName.get(name)?.t==='m').sort((a,b)=>(byId.get(whoByName.get(a).id)?.rank||9999)-(byId.get(whoByName.get(b).id)?.rank||9999));
-  const mvpDate=new Date(post.createdAt).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',month:'long',day:'numeric'});
-  const mvpTitle=mvpNames.length?`${mvpDate} 정모의 MVP ${mvpNames.join(' · ')}`:post.title;
   const nextRows=orderRankingRows(rankingRows.map(row=>{const delta=deltas.get(row.member_id)||{attendance:0,wins:0,losses:0,points:0};return {...row,points:row.points+delta.points,attendance:row.attendance+delta.attendance,wins:row.wins+delta.wins,losses:row.losses+delta.losses};}));
   const gNext=guestRows.map(r=>{const d=gDeltas.get(r.guest_id)||{attendance:0,wins:0,losses:0,points:0};return {...r,points:r.points+d.points,attendance:r.attendance+d.attendance,wins:r.wins+d.wins,losses:r.losses+d.losses};});
-  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:mvpTitle,preTitle:post.title};
+  // 요청 078: 마감해도 제목은 그대로 두고, MVP는 mvp[]로만 저장한다(화면에서 제목 아래 작게 표시).
+  const at=new Date().toISOString(),nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:post.title,preTitle:post.title};
   const statements=[
     db.prepare('INSERT INTO ranking_settlements (schedule_id,settled_at,operation) VALUES (?,?,?)').bind(id,at,input.operation),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version)
@@ -334,7 +333,7 @@ export default {async fetch(request,env){
         const kind=url.searchParams.get('kind');
         if(!['schedule','notice'].includes(kind))return json({error:'게시판을 확인해주세요.'},400);
         const offset=Math.max(0,Math.min(1000000,Math.floor(Number(url.searchParams.get('offset')))||0));
-        const {results}=await env.DB.prepare('SELECT id,kind,json_extract(payload,\'$.title\') AS title,json_extract(payload,\'$.settledAt\') AS settledAt,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
+        const {results}=await env.DB.prepare('SELECT id,kind,COALESCE(json_extract(payload,\'$.preTitle\'),json_extract(payload,\'$.title\')) AS title,json_extract(payload,\'$.settledAt\') AS settledAt,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
         return json({items:results.slice(0,30),hasMore:results.length>30});
       }
       const match=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})$/);

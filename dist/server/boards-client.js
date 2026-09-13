@@ -9,29 +9,37 @@ export function client(EDITOR,ADMIN){
     output.textContent=String(Math.max(1,Math.floor((today-since)/86400000)+1));
   }
   updateDaysTogether();setInterval(updateDaysTogether,60000);
-  function loginButton(cls,label,title,fieldLabel,endpoint,redirectRe,goLabel){
-    const btn=document.createElement('button');
-    btn.className=cls;btn.textContent=label;btn.setAttribute('aria-haspopup','dialog');document.body.append(btn);
-    btn.onclick=()=>{
-      dialog.innerHTML='<form id="loginForm"><div class="dialog-head"><h2 id="pickerTitle">'+esc(title)+'</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="loginPw">'+esc(fieldLabel)+'</label><input id="loginPw" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">'+esc(goLabel)+'</button><button type="button" id="cancelLogin">취소</button></div></form>';
-      const close=()=>dialog.close();$('closeLogin').onclick=close;$('cancelLogin').onclick=close;
-      $('loginForm').onsubmit=async e=>{
-        e.preventDefault();const submit=$('loginSubmit');if(submit.disabled)return;
-        submit.disabled=true;submit.textContent='확인 중…';$('loginError').textContent='';
-        try{
-          const result=await api(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('loginPw').value})});
-          if(!redirectRe.test(result.redirect||''))throw Error('주소를 확인하지 못했습니다.');
-          location.assign(result.redirect);
-        }catch(error){$('loginError').textContent=error.message;$('loginPw').focus();$('loginPw').select();}
-        finally{submit.disabled=false;submit.textContent=goLabel;}
-      };
-      dialog.onclose=()=>{dialog.innerHTML='';btn.focus();};dialog.showModal();
+  function openLoginDialog(title,fieldLabel,endpoint,redirectRe,goLabel,focusBack){
+    dialog.innerHTML='<form id="loginForm"><div class="dialog-head"><h2 id="pickerTitle">'+esc(title)+'</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="loginPw">'+esc(fieldLabel)+'</label><input id="loginPw" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">'+esc(goLabel)+'</button><button type="button" id="cancelLogin">취소</button></div></form>';
+    const close=()=>dialog.close();$('closeLogin').onclick=close;$('cancelLogin').onclick=close;
+    $('loginForm').onsubmit=async e=>{
+      e.preventDefault();const submit=$('loginSubmit');if(submit.disabled)return;
+      submit.disabled=true;submit.textContent='확인 중…';$('loginError').textContent='';
+      try{
+        const result=await api(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('loginPw').value})});
+        if(!redirectRe.test(result.redirect||''))throw Error('주소를 확인하지 못했습니다.');
+        location.assign(result.redirect);
+      }catch(error){$('loginError').textContent=error.message;$('loginPw').focus();$('loginPw').select();}
+      finally{submit.disabled=false;submit.textContent=goLabel;}
     };
-    return btn;
+    dialog.onclose=()=>{dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
   }
   if(!EDITOR&&!ADMIN){
-    loginButton('operator-access','운영진권한','운영진권한','운영진 비밀번호','/api/operator-login',/^\/operate-[a-zA-Z0-9_-]+$/,'운영진 화면으로');
-    loginButton('operator-access admin-access','홈페이지관리자 권한','홈페이지관리자 권한','관리자 비밀번호','/api/admin-login',/^\/administrate-[a-zA-Z0-9_-]+$/,'관리자 화면으로');
+    // 요청 075: 항상 노출된 버튼 대신 작은 사람 실루엣 버튼 → 누르면 두 항목(운영진권한 위 / 홈페이지관리자 권한 아래).
+    const fab=document.createElement('button');
+    fab.className='access-fab';fab.type='button';fab.setAttribute('aria-label','로그인');fab.setAttribute('aria-haspopup','menu');fab.setAttribute('aria-expanded','false');
+    fab.innerHTML='<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5Z"/></svg>';
+    const menu=document.createElement('div');menu.className='access-menu';menu.hidden=true;menu.setAttribute('role','menu');
+    const opItem=document.createElement('button');opItem.type='button';opItem.className='access-item';opItem.textContent='운영진권한';opItem.setAttribute('role','menuitem');
+    const adItem=document.createElement('button');adItem.type='button';adItem.className='access-item';adItem.textContent='홈페이지관리자 권한';adItem.setAttribute('role','menuitem');
+    menu.append(opItem,adItem);
+    document.body.append(menu,fab);
+    const closeMenu=()=>{menu.hidden=true;fab.setAttribute('aria-expanded','false');};
+    fab.onclick=e=>{e.stopPropagation();const willOpen=menu.hidden;menu.hidden=!willOpen;fab.setAttribute('aria-expanded',String(willOpen));};
+    document.addEventListener('click',e=>{if(!menu.hidden&&!menu.contains(e.target)&&e.target!==fab)closeMenu();});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
+    opItem.onclick=()=>{closeMenu();openLoginDialog('운영진권한','운영진 비밀번호','/api/operator-login',/^\/operate-[a-zA-Z0-9_-]+$/,'운영진 화면으로',()=>fab.focus());};
+    adItem.onclick=()=>{closeMenu();openLoginDialog('홈페이지관리자 권한','관리자 비밀번호','/api/admin-login',/^\/administrate-[a-zA-Z0-9_-]+$/,'관리자 화면으로',()=>fab.focus());};
   }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   // 요청 073: 운영진(왕관)은 DB(is_operator)로 관리. 초기값은 아래 6명, 데이터 로드 시 갱신.
@@ -75,7 +83,7 @@ export function client(EDITOR,ADMIN){
   async function getPeople(){if(!people.length){people=(await api('/api/people')).people;syncOperators(people);}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
-  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">✨ 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' · '))+'</span></a>';}}catch(e){}}
+  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
     if(EDITOR)$('newPost').onclick=()=>kind==='schedule'?openPicker(null):editNotice({id:crypto.randomUUID(),kind,version:0,title:'',body:''});
@@ -130,8 +138,9 @@ export function client(EDITOR,ADMIN){
     const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button><button id="deletePost" class="danger">삭제</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
     const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?(allScoredDone?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>':'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. 라운드 버튼에 점이 있는 <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력하면 <b>대진 마감</b> 버튼이 나타나요.</div>'):'';
-    const mvpCls=(d.kind==='schedule'&&d.settledAt&&Array.isArray(d.mvp)&&d.mvp.length)?' class="mvp-title"':'';
-    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1'+mvpCls+'>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';
+    // 요청 078: 마감해도 제목은 원래대로. MVP는 제목 아래 작게(🥇, 이름 사이 공백).
+    const mvpLine=(d.kind==='schedule'&&d.settledAt&&Array.isArray(d.mvp)&&d.mvp.length)?'<div class="mvp-line"><span class="mvp-medal" aria-hidden="true">🥇</span> <span class="mvp-title">이번 정모 MVP '+esc(d.mvp.join(' '))+'</span></div>':'';
+    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.preTitle||d.title)+'</h1>'+mvpLine+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';
     if(d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn));
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
