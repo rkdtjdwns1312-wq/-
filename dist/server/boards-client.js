@@ -94,30 +94,33 @@ export function client(EDITOR){
       ? '<select aria-label="'+(ri+1)+'라운드 '+(mi+1)+'대진 '+(si+1)+'번째 참가자" data-r="'+ri+'" data-m="'+mi+'" data-s="'+si+'">'+d.names.map(p=>'<option'+(p===m[si]?' selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'
       : '<span class="player">'+nameHTML(m[si])+'</span>';
     const team=(m,mi,ri,a,b)=>'<div class="team">'+cell(m,mi,ri,a)+'<span class="team-amp">·</span>'+cell(m,mi,ri,b)+'</div>';
+    const isVoid=m=>Array.isArray(d.absent)&&d.absent.length>0&&m.some(n=>d.absent.includes(n));
     const multi=!editing&&d.schedule.length>1;
     const vr=multi?Math.min(Math.max(1,viewRound),d.schedule.length):0;
-    const roundDone=ri=>d.schedule[ri].method==='random'||d.schedule[ri].g.every((m,mi)=>{const v=results[ri+'-'+mi];return v==='a'||v==='b';});
+    const roundDone=ri=>d.schedule[ri].method==='random'||d.schedule[ri].g.every((m,mi)=>{if(isVoid(m))return true;const v=results[ri+'-'+mi];return v==='a'||v==='b';});
     const tabs=multi?'<div class="round-tabs" role="tablist" aria-label="라운드 선택">'+d.schedule.map((r,ri)=>'<button type="button" class="round-tab'+((ri+1)===vr?' on':'')+(!d.settledAt&&!roundDone(ri)?' incomplete':'')+'" data-round-tab="'+(ri+1)+'" aria-selected="'+((ri+1)===vr)+'">'+esc(r.round)+'R</button>').join('')+'</div>':'';
     return tabs+d.schedule.map((r,ri)=>{
       const scored=r.method!=='random';
       return '<section class="round" data-round-panel="'+(ri+1)+'"'+(multi&&(ri+1)!==vr?' hidden':'')+'><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
-        const key=ri+'-'+mi,result=results[key];
-        const showWin=scored&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
-        const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+(result===side?' win':'')+'">'+team(m,mi,ri,a,b)+'</div>';
-        const mid=scored?'<div class="vs-cluster">'+(showWin?winBtn(key,'a',result,locked):'')+'<b class="vs">VS</b>'+(showWin?winBtn(key,'b',result,locked):'')+'</div>':'<b class="vs">VS</b>';
+        const key=ri+'-'+mi,result=results[key],voidM=isVoid(m);
+        const showWin=scored&&!voidM&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
+        const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+((!voidM&&result===side)?' win':'')+'">'+team(m,mi,ri,a,b)+'</div>';
+        const mid=(scored&&!voidM)?'<div class="vs-cluster">'+(showWin?winBtn(key,'a',result,locked):'')+'<b class="vs">VS</b>'+(showWin?winBtn(key,'b',result,locked):'')+'</div>':'<b class="vs">VS</b>';
         let note='';
-        if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
+        if(voidM)note='<div class="match-result"><span class="random-note void-note">불참자가 있어 무효 경기예요. 점수에 반영되지 않아요.</span></div>';
+        else if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
         else if(showWin&&!result&&!locked)note='<div class="match-hint">이긴 팀의 <b>승</b>을 눌러주세요</div>';
-        return '<div class="match '+(editing?'edit-match':'')+(result?' has-result result-'+result:'')+(scored?'':' random-match')+'"><div class="court">'+(mi+1)+'번 대진</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
+        return '<div class="match '+(editing?'edit-match':'')+((!voidM&&result)?' has-result result-'+result:'')+((scored&&!voidM)?'':' random-match')+(voidM?' void-match':'')+'"><div class="court">'+(mi+1)+'번 대진</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
       }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
     }).join('');
   }
   async function detail(id,token){
     const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken)return;
-    const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
+    const dVoid=m=>Array.isArray(d.absent)&&d.absent.length>0&&m.some(n=>d.absent.includes(n));
+    const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
     const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt);
     const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button><button id="deletePost" class="danger">삭제</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
-    const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
+    const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?(allScoredDone?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>':'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. 라운드 버튼에 점이 있는 <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력하면 <b>대진 마감</b> 버튼이 나타나요.</div>'):'';
     const mvpCls=(d.kind==='schedule'&&d.settledAt&&Array.isArray(d.mvp)&&d.mvp.length)?' class="mvp-title"':'';
     app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1'+mvpCls+'>'+esc(d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';

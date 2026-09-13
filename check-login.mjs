@@ -113,6 +113,22 @@ assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/un
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
 const uRev=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uRev.points,uPre);assert.equal(uRev.attendance,0);assert.equal(uRev.wins,0);
 assert.equal((await (await worker.fetch(new Request(origin+'/api/posts/unsettle-test'),env)).json()).data.settledAt,null);
+// 요청 062: 코트 추가(라운드 내 경기 수 가변·중복 배치) — 시오·구구·구름·백구가 한 라운드에 두 경기
+const putV=(id,v,d)=>worker.fetch(new Request(origin+'/api/posts/'+id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:v,operation:crypto.randomUUID(),data:d})}),env);
+const vt={id:'court-test',kind:'schedule',version:0,title:'코트추가 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구'],['시오','구름','구구','백구']],rest:[]}],results:{'0-0':'a','0-1':'a'}};
+assert.equal((await putV('court-test',0,vt)).status,200);
+const cB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,cbp=n=>cB.find(r=>r.name===n).points;const cb={s:cbp('시오'),g:cbp('구구'),r:cbp('구름'),b:cbp('백구')};
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/court-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:1,operation:'settle-court'})}),env)).status,200);
+const cA=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,cap2=n=>cA.find(r=>r.name===n).points;
+assert.equal(cap2('시오')-cb.s,3);assert.equal(cap2('구구')-cb.g,1);assert.equal(cap2('구름')-cb.r,1);assert.equal(cap2('백구')-cb.b,-1);
+// 요청 061: 불참(무효 경기) — 백구 불참 → 백구 낀 경기 무효, 백구 출석 0, 시오는 출석만
+const ab={id:'absent-test',kind:'schedule',version:0,title:'불참 테스트',names:['호잇','뚜기','주밤','로토','시오','구구','구름','백구'],participantIds:['member-4','member-5','member-6','member-7','member-10','member-17','member-16','member-18'],courts:2,rounds:1,schedule:[{round:1,method:'balanced',g:[['호잇','뚜기','주밤','로토'],['시오','구구','구름','백구']],rest:[]}],results:{'0-0':'a','0-1':'a'},absent:['백구']};
+assert.equal((await putV('absent-test',0,ab)).status,200);
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/absent-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'0-1',winner:'a'})}),env)).status,400);
+const aB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,abp=n=>aB.find(r=>r.name===n).points;const abv={h:abp('호잇'),t:abp('뚜기'),j:abp('주밤'),l:abp('로토'),s:abp('시오'),b:abp('백구')};
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/absent-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:1,operation:'settle-abs'})}),env)).status,200);
+const aA=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,aap=n=>aA.find(r=>r.name===n).points;
+assert.equal(aap('호잇')-abv.h,2);assert.equal(aap('뚜기')-abv.t,2);assert.equal(aap('주밤')-abv.j,0);assert.equal(aap('로토')-abv.l,0);assert.equal(aap('시오')-abv.s,1);assert.equal(aap('백구')-abv.b,0);
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
