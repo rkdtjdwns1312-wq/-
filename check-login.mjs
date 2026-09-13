@@ -5,8 +5,9 @@ import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 import { adminKeyFor } from './dist/server/admin-login.js';
+import { runRankingProtectionChecks } from './check-ranking-protection.mjs';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12','0008_points_movement_and_legacy_cleanup','0009_guest_scoring','0010_admin_operators_backups'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12','0008_points_movement_and_legacy_cleanup','0009_guest_scoring','0010_admin_operators_backups','0011_rank_movement_and_score_floor'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password',ADMIN_PASSWORD:'admin-pass'};
 const origin='http://localhost:4173';
@@ -31,7 +32,7 @@ const sio=rankingData.items.find(row=>row.name==='시오'),newMember=rankingData
 // 주밤(115)·로토(104): the sheet said A+, the operator confirmed A on 2026-09-12; seeds follow the points rule everywhere, including the roster shown to operators.
 const jubam=rankingData.items.find(row=>row.name==='주밤'),roto=rankingData.items.find(row=>row.name==='로토');assert.equal(jubam.points,115);assert.equal(jubam.seed,'A');assert.equal(roto.points,104);assert.equal(roto.seed,'A');
 const peopleData=await (await worker.fetch(new Request(origin+'/api/people'),env)).json();assert.equal(peopleData.people.find(p=>p.name==='주밤').seed,'A');assert.equal(peopleData.people.find(p=>p.name==='로토').seed,'A');
-const guestPeople=peopleData.people.filter(p=>p.type==='guest');assert.equal(guestPeople.length,35);assert.ok(guestPeople.every(p=>Number.isInteger(p.points)));assert.equal(guestPeople.find(p=>p.name==='몽구').points,125);assert.equal(guestPeople.find(p=>p.name==='우니').points,17);
+const guestPeople=peopleData.people.filter(p=>p.type==='guest');assert.equal(guestPeople.length,35);assert.ok(guestPeople.every(p=>Number.isInteger(p.points)&&p.points>=20));assert.equal(guestPeople.find(p=>p.name==='몽구').points,125);assert.equal(guestPeople.find(p=>p.name==='우니').points,20);
 // 요청 045: 회원 명단의 (부재)·(서울) 표기 제거
 assert.ok(rankingData.items.every(r=>!/\((?:서울|부재)\)/.test(r.name)),'회원 랭킹 이름에 (부재)/(서울)가 없어야 합니다');
 assert.equal(rankingData.items.find(r=>r.name==='덕자').points,60);assert.equal(rankingData.items.find(r=>r.name==='우민').points,40);
@@ -46,7 +47,7 @@ const addP=(name,type,points,key=env.EDITOR_KEY)=>worker.fetch(new Request(origi
 assert.equal((await addP('추가회원','member',55,null)).status,403);
 const addM=await addP('추가회원','member',55);assert.equal(addM.status,200);const addMId=(await addM.json()).data.id;
 const rkA=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();assert.equal(rkA.items.length,62);assert.ok(rkA.items.some(r=>r.name==='추가회원'&&r.seed==='D+'));
-assert.equal((await addP('추가회원','member',10)).status,409);
+assert.equal((await addP('추가회원','member',20)).status,409);
 const addG=await addP('추가게스트','guest',30);assert.equal(addG.status,200);const addGId=(await addG.json()).data.id;
 const ppA=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.ok(ppA.some(p=>p.name==='추가게스트'&&p.type==='guest'&&p.seed==='E+'));assert.equal(ppA.filter(p=>p.type==='guest').length,36);
 assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({ids:[addMId,addGId]})}),env)).status,200);
@@ -194,6 +195,7 @@ const bkDl=await worker.fetch(new Request(origin+'/api/backups/'+bkId,{headers:{
 assert.equal(bkDl.status,200);const bkData=JSON.parse(await bkDl.text());assert.ok(Array.isArray(bkData.posts)&&Array.isArray(bkData.members)&&Array.isArray(bkData.guests));
 await worker.scheduled({cron:'0 0 * * 0'},env,{waitUntil(){}});
 assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:{'x-kokkiri-admin':adminKey}}),env)).json()).items.length>=2);
+await runRankingProtectionChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
