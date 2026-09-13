@@ -99,7 +99,9 @@ export function client(EDITOR){
     const vr=multi?Math.min(Math.max(1,viewRound),d.schedule.length):0;
     const roundDone=ri=>d.schedule[ri].method==='random'||d.schedule[ri].g.every((m,mi)=>{if(isVoid(m))return true;const v=results[ri+'-'+mi];return v==='a'||v==='b';});
     const tabs=multi?'<div class="round-tabs" role="tablist" aria-label="라운드 선택">'+d.schedule.map((r,ri)=>'<button type="button" class="round-tab'+((ri+1)===vr?' on':'')+(!d.settledAt&&!roundDone(ri)?' incomplete':'')+'" data-round-tab="'+(ri+1)+'" aria-selected="'+((ri+1)===vr)+'">'+esc(r.round)+'R</button>').join('')+'</div>':'';
-    return tabs+d.schedule.map((r,ri)=>{
+    const absentSet=Array.isArray(d.absent)?d.absent:[];
+    const absentPanel=editing?'<div class="absent-panel"><div class="absent-title">불참자 지정</div><p class="absent-hint">불참으로 표시하면 그 사람이 들어간 경기는 무효(점수 미반영)가 되고, 출석 점수도 받지 않아요. 다시 누르면 해제됩니다.</p><div class="absent-chips">'+d.names.map(n=>'<button type="button" class="absent-toggle'+(absentSet.includes(n)?' on':'')+'" data-absent-name="'+esc(n)+'" aria-pressed="'+absentSet.includes(n)+'">'+nameHTML(n)+'</button>').join('')+'</div></div>':'';
+    return tabs+absentPanel+d.schedule.map((r,ri)=>{
       const scored=r.method!=='random';
       return '<section class="round" data-round-panel="'+(ri+1)+'"'+(multi&&(ri+1)!==vr?' hidden':'')+'><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3>'+(scored?'':'<span class="round-tag">랜덤 · 점수 미반영</span>')+'</div><div class="matches">'+r.g.map((m,mi)=>{
         const key=ri+'-'+mi,result=results[key],voidM=isVoid(m);
@@ -110,8 +112,8 @@ export function client(EDITOR){
         if(voidM)note='<div class="match-result"><span class="random-note void-note">불참자가 있어 무효 경기예요. 점수에 반영되지 않아요.</span></div>';
         else if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
         else if(showWin&&!result&&!locked)note='<div class="match-hint">이긴 팀의 <b>승</b>을 눌러주세요</div>';
-        return '<div class="match '+(editing?'edit-match':'')+((!voidM&&result)?' has-result result-'+result:'')+((scored&&!voidM)?'':' random-match')+(voidM?' void-match':'')+'"><div class="court">'+(mi+1)+'번 대진</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
-      }).join('')+'</div><div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
+        return '<div class="match '+(editing?'edit-match':'')+((!voidM&&result)?' has-result result-'+result:'')+((scored&&!voidM)?'':' random-match')+(voidM?' void-match':'')+'"><div class="court">'+(mi+1)+'번 대진'+(editing?'<button type="button" class="del-court" data-del-court="'+ri+'-'+mi+'" aria-label="'+(mi+1)+'번 대진 삭제" title="이 대진 삭제">✕</button>':'')+'</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
+      }).join('')+'</div>'+(editing?'<button type="button" class="add-court" data-add-court="'+ri+'">＋ 코트 추가</button>':'')+'<div class="rest" id="rest-'+ri+'">휴식: '+esc(r.rest.join(', ')||'없음')+'</div></section>';
     }).join('');
   }
   async function detail(id,token){
@@ -136,10 +138,16 @@ export function client(EDITOR){
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
   function editSchedule(d){
-    stopPoll();startDraft(d);draft.results=draft.results||{};
+    stopPoll();startDraft(d);draft.results=draft.results||{};draft.absent=Array.isArray(draft.absent)?draft.absent:[];
     app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수 자리는 드롭다운으로 바꿀 수 있어요. 승패 기록과 대진 마감(점수 확정)는 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
     $('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};
     $('editMatches').onclick=e=>{
+      const abs=e.target.closest('[data-absent-name]');
+      if(abs){const name=abs.dataset.absentName;const i=draft.absent.indexOf(name);if(i>=0)draft.absent.splice(i,1);else draft.absent.push(name);changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
+      const add=e.target.closest('[data-add-court]');
+      if(add){const ri=+add.dataset.addCourt,r=draft.schedule[ri];const pool=[...(r.rest||[]),...draft.names],seen=new Set(),four=[];for(const n of pool){if(!seen.has(n)){seen.add(n);four.push(n);if(four.length===4)break;}}if(four.length<4)return alert('코트를 추가하려면 참가자가 4명 이상 필요해요.');r.g.push(four);r.rest=draft.names.filter(n=>!r.g.flat().includes(n));changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
+      const del=e.target.closest('[data-del-court]');
+      if(del){const parts=del.dataset.delCourt.split('-'),ri=+parts[0],mi=+parts[1],r=draft.schedule[ri];if(r.g.length<=1)return alert('한 라운드에는 최소 1개의 대진이 있어야 해요.');if(!confirm((mi+1)+'번 대진을 삭제할까요?'))return;r.g.splice(mi,1);const nr={};for(const k in draft.results){const kp=k.split('-'),kr=+kp[0],km=+kp[1];if(kr!==ri){nr[k]=draft.results[k];continue;}if(km===mi)continue;nr[kr+'-'+(km>mi?km-1:km)]=draft.results[k];}draft.results=nr;r.rest=draft.names.filter(n=>!r.g.flat().includes(n));changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
       const button=e.target.closest('[data-result-key]');if(!button)return;
       draft.results[button.dataset.resultKey]=button.dataset.winner;changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);
     };
