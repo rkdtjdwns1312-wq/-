@@ -263,6 +263,7 @@ export function client(EDITOR){
     function chk(){const ck=$('seedChecked');if(ck)ck.textContent=checked.size?checked.size+'명 선택됨':'';}
     function render(){
       $('seedMembers').setAttribute('aria-pressed',String(type==='member'));$('seedGuests').setAttribute('aria-pressed',String(type==='guest'));
+      const promoteBtn=$('seedPromote');if(promoteBtn)promoteBtn.hidden=(type!=='guest');
       const term=$('seedSearch').value.trim();
       const cbHead=editing?'<th></th>':'';
       const cb=id=>editing?'<td><input type="checkbox" class="seed-cb" data-id="'+esc(id)+'"'+(checked.has(id)?' checked':'')+'></td>':'';
@@ -273,16 +274,16 @@ export function client(EDITOR){
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));
         const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
-        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td><span class="muted">-</span></td><td>'+nameHTML(p.name)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td>'+(typeof p.points==='number'?p.points:'-')+'</td><td><span class="muted">-</span></td><td><span class="muted">-</span></td><td><span class="muted">-</span></td></tr>').join('');
-        $('seedList').innerHTML=rows?'<p class="seed-note">게스트 점수는 2026년 9월 10일 기준표 값이며, 정모 출석·승패 점수 누적에는 반영되지 않습니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
+        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td><span class="muted">-</span></td><td>'+nameHTML(p.name)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td><span class="pts-cell">'+(typeof p.points==='number'?p.points:'-')+'</span>'+pointsMove(p)+'</td><td>'+(p.attendance??0)+'</td><td>'+(p.wins??0)+'</td><td>'+(p.losses??0)+'</td></tr>').join('');
+        $('seedList').innerHTML=rows?'<p class="seed-note">게스트도 정모 출석 +1, 승 +1, 패 -1로 점수가 반영됩니다. 시작 점수는 2026년 9월 10일 기준표 값입니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }
       chk();
     }
     function paint(){
-      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다</p>'+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
+      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다</p>'+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
       $('seedMembers').onclick=()=>{type='member';checked.clear();render();};$('seedGuests').onclick=()=>{type='guest';checked.clear();render();};$('seedSearch').oninput=render;
       if(EDITOR)$('seedEdit').onclick=()=>{editing=!editing;checked.clear();paint();};
-      if(editing){$('seedList').addEventListener('change',e=>{const c=e.target.closest('.seed-cb');if(!c)return;if(c.checked)checked.add(c.dataset.id);else checked.delete(c.dataset.id);chk();});$('seedAdd').onclick=addPerson;$('seedDelete').onclick=deleteSelected;}
+      if(editing){$('seedList').addEventListener('change',e=>{const c=e.target.closest('.seed-cb');if(!c)return;if(c.checked)checked.add(c.dataset.id);else checked.delete(c.dataset.id);chk();});$('seedAdd').onclick=addPerson;$('seedDelete').onclick=deleteSelected;$('seedPromote').onclick=promoteSelected;}
       render();
     }
     async function refresh(){people=[];const rd=await load();if(!rd)return;rankingData=rd;ranking=rd.items;checked.clear();paint();}
@@ -290,6 +291,12 @@ export function client(EDITOR){
       if(!checked.size)return alert('삭제할 사람을 체크해주세요.');
       if(!confirm(checked.size+'명을 시드현황에서 삭제할까요? 대진 만들기 목록에서도 빠집니다.'))return;
       try{await api('/api/people/hide',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({ids:[...checked]})});message('삭제했어요.');await refresh();}catch(e){message(e.message,true);}
+    }
+    async function promoteSelected(){
+      if(type!=='guest')return alert('게스트 탭에서 이관할 게스트를 체크해주세요.');
+      if(!checked.size)return alert('회원으로 이관할 게스트를 체크해주세요.');
+      if(!confirm(checked.size+'명을 회원으로 이관할까요? 점수·출석·승·패 기록을 그대로 회원 명단으로 옮깁니다.'))return;
+      try{await api('/api/people/promote',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({ids:[...checked]})});message('회원으로 이관했어요.');await refresh();}catch(e){message(e.message,true);}
     }
     function addPerson(){
       dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">사람 추가</h2><button id="closeAdd" aria-label="닫기">×</button></div><label>닉네임<input id="addName" maxlength="100" placeholder="닉네임"></label><label>시드 점수<input id="addPoints" type="number" min="0" max="1000" placeholder="예: 90"></label><div class="tabs"><button type="button" id="addTypeM" aria-pressed="true">회원</button><button type="button" id="addTypeG" aria-pressed="false">게스트</button></div><button id="addConfirm" class="primary">확인</button>';
