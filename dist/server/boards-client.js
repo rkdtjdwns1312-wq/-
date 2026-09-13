@@ -259,6 +259,7 @@ export function client(EDITOR){
     let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;
     const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
     function movement(row){if(row.previous_rank===row.rank)return '<span class="muted">-</span>';return row.previous_rank>row.rank?'<span class="rank-movement">▲ '+(row.previous_rank-row.rank)+'</span>':'<span class="rank-down">▼ '+(row.rank-row.previous_rank)+'</span>';}
+    function pointsMove(row){if(row.previous_points==null||row.previous_points===row.points)return '';const d=row.points-row.previous_points;return d>0?'<span class="pts-delta rank-movement">▲'+d+'</span>':'<span class="pts-delta rank-down">▼'+(-d)+'</span>';}
     function chk(){const ck=$('seedChecked');if(ck)ck.textContent=checked.size?checked.size+'명 선택됨':'';}
     function render(){
       $('seedMembers').setAttribute('aria-pressed',String(type==='member'));$('seedGuests').setAttribute('aria-pressed',String(type==='guest'));
@@ -267,7 +268,7 @@ export function client(EDITOR){
       const cb=id=>editing?'<td><input type="checkbox" class="seed-cb" data-id="'+esc(id)+'"'+(checked.has(id)?' checked':'')+'></td>':'';
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';
-        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td>'+row.points+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
+        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));

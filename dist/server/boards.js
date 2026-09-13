@@ -17,10 +17,8 @@ const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
 const defaultTitle=()=>new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
 
-// Backfill the old singleton as one permanent post, without changing its source row.
-async function preserveLegacy(db){
-  await db.prepare("INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) SELECT 'legacy-schedule','schedule',payload,1,'legacy',updated_at,updated_at FROM schedules WHERE id=1").run();
-}
+// 옛 단일 대진표(schedules id=1)는 마이그레이션 0004에서 board_posts로 1회 이관했다.
+// 예전에는 조회 때마다 되살렸으나(preserveLegacy) 그 때문에 삭제해도 다시 생겨 제거했다(요청 065).
 const validResult=value=>value==='a'||value==='b';
 function cleanResults(value,schedule){
   const results={};
@@ -100,7 +98,7 @@ async function settleSchedule(db,id,input){
     db.prepare('INSERT INTO ranking_settlements (schedule_id,settled_at,operation) VALUES (?,?,?)').bind(id,at,input.operation),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version)
   ];
-  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,byId.get(next.member_id).rank,next.attendance,next.wins,next.losses,at,next.member_id));
+  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,previous_points=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,byId.get(next.member_id).rank,byId.get(next.member_id).points,next.attendance,next.wins,next.losses,at,next.member_id));
   for(const [memberId,delta] of deltas){const before=byId.get(memberId),after=nextRows.find(row=>row.member_id===memberId);statements.push(db.prepare('INSERT INTO ranking_events (schedule_id,member_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,rank_before,rank_after,seed_before,seed_after,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,memberId,delta.attendance,delta.wins,delta.losses,delta.points,before.points,after.points,before.rank,after.rank,before.seed,after.seed,at));}
   await db.batch(statements);
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
@@ -127,7 +125,7 @@ async function unsettleSchedule(db,id){
     db.prepare('DELETE FROM ranking_settlements WHERE schedule_id=?').bind(id),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation='unsettle',updated_at=? WHERE id=? AND kind='schedule'").bind(JSON.stringify(nextPayload),at,id)
   ];
-  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,next.rank,next.attendance,next.wins,next.losses,at,next.member_id));
+  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,previous_points=?,attendance=?,wins=?,losses=?,updated_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,next.rank,next.points,next.attendance,next.wins,next.losses,at,next.member_id));
   await db.batch(statements);
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
@@ -153,7 +151,7 @@ export default {async fetch(request,env){
       if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
         await ensureRankingMembers(env.DB,appPeople);
-        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
+        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
         const sourceDate='2026-09-10';
         const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
         const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
@@ -173,7 +171,7 @@ export default {async fetch(request,env){
           const dup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
           if(dup)return json({error:'같은 이름의 회원이 이미 있어요. 다른 이름을 써주세요.'},409);
           const id='custom-m-'+crypto.randomUUID();
-          await env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,at).run();
+          await env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,points,at).run();
           const rows=(await env.DB.prepare('SELECT * FROM ranking_members WHERE hidden=0').all()).results;
           await env.DB.batch(orderRankingRows(rows).map(r=>env.DB.prepare('UPDATE ranking_members SET rank=?,previous_rank=? WHERE member_id=?').bind(r.rank,r.rank,r.member_id)));
           return json({data:{id,name,type,points,seed:seedForPoints(points)}});
@@ -250,7 +248,6 @@ export default {async fetch(request,env){
       if(path==='/api/posts'&&request.method==='GET'){
         const kind=url.searchParams.get('kind');
         if(!['schedule','notice'].includes(kind))return json({error:'게시판을 확인해주세요.'},400);
-        await preserveLegacy(env.DB);
         const offset=Math.max(0,Math.min(1000000,Math.floor(Number(url.searchParams.get('offset')))||0));
         const {results}=await env.DB.prepare('SELECT id,kind,json_extract(payload,\'$.title\') AS title,json_extract(payload,\'$.settledAt\') AS settledAt,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
         return json({items:results.slice(0,30),hasMore:results.length>30});
@@ -259,7 +256,6 @@ export default {async fetch(request,env){
       if(!match)return json({error:'찾을 수 없는 요청입니다.'},404);
       const id=match[1];
       if(request.method==='GET'){
-        await preserveLegacy(env.DB);
         const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
         return row?json({data:unpack(row)}):json({error:'게시글을 찾을 수 없습니다.'},404);
       }
@@ -289,7 +285,7 @@ export default {async fetch(request,env){
         ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(id,input.kind,JSON.stringify(payload),input.operation,at,at).run()
         :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?').bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version).run();
       // 요청 047: 새 대진(정모)을 만들 때 출석·승·패를 0으로 초기화한다. 점수·시드·순위는 누적 유지.
-      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await ensureRankingMembers(env.DB,appPeople);await env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,updated_at=?').bind(at).run();}
+      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await ensureRankingMembers(env.DB,appPeople);await env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,previous_rank=rank,previous_points=points,updated_at=?').bind(at).run();}
       const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
       if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);

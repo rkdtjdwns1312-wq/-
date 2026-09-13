@@ -54,8 +54,8 @@ export function buildInitialRankings(people){
 export async function ensureRankingMembers(db,people){
   const initial=buildInitialRankings(people);
   await db.batch(initial.map(row=>db.prepare(`INSERT OR IGNORE INTO ranking_members
-    (member_id,name,points,seed,rank,previous_rank,attendance,wins,losses,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(row.memberId,row.name,row.points,row.seed,row.rank,row.previousRank,row.attendance,row.wins,row.losses,'2026-09-10T00:00:00.000Z')));
+    (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(row.memberId,row.name,row.points,row.seed,row.rank,row.previousRank,row.points,row.attendance,row.wins,row.losses,'2026-09-10T00:00:00.000Z')));
 }
 
 export function orderRankingRows(rows){
