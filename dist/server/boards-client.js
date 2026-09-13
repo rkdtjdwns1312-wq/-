@@ -198,6 +198,7 @@ export function client(EDITOR){
     const roleRank=p=>p.type==='guest'?3:p.late?2:p.operator?1:0; // 클수록 먼저 쉼(회원0<운영진1<늦참2<게스트3)
     const cap=Math.min(courts,Math.floor(roster.length/4));
     const plays=new Map(roster.map(p=>[p.id,0]));
+    const pairCount=new Map(),pk=(x,y)=>x<y?x+'|'+y:y+'|'+x; // 요청 071: 파트너(팀메이트) 중복 최소화용
     const out=[];
     for(let r=0;r<rounds;r++){
       const order=shuffle(roster).sort((a,b)=>roleRank(a)-roleRank(b)||(plays.get(a.id)-plays.get(b.id)));
@@ -205,14 +206,18 @@ export function client(EDITOR){
       playing.forEach(p=>plays.set(p.id,plays.get(p.id)+1));
       const method=methods[r]||'random';
       const groups=Array.from({length:cap},()=>[]);
+      // 요청 070: 랜덤=완전 랜덤, 동일·인접=시드 붙어있는 4명씩 같은 코트(정렬 후 4명 블록).
       if(method==='random'){const sh=shuffle(playing);for(let i=0;i<cap*4;i++)groups[Math.floor(i/4)].push(sh[i]);}
-      else{const sorted=[...playing].sort((a,b)=>pts(b)-pts(a)||Math.random()-.5);
-        if(method==='same')for(let i=0;i<cap*4;i++)groups[Math.floor(i/4)].push(sorted[i]);
-        else for(let i=0;i<cap*4;i++)groups[i%cap].push(sorted[i]);} // balanced(인접=실력균형): 사분위 라운드로빈
+      else{const sorted=[...playing].sort((a,b)=>pts(b)-pts(a)||Math.random()-.5);for(let i=0;i<cap*4;i++)groups[Math.floor(i/4)].push(sorted[i]);}
+      // 팀 나누기(4명→두 팀) 선호 순서: 동일=붙어있는 둘(0,1)(2,3), 인접=한 단계 위아래(0,2)(1,3). 중복 파트너는 최소화.
+      const prefer=method==='same'?[[[0,1],[2,3]],[[0,2],[1,3]],[[0,3],[1,2]]]:method==='balanced'?[[[0,2],[1,3]],[[0,3],[1,2]],[[0,1],[2,3]]]:[[[0,1],[2,3]],[[0,2],[1,3]],[[0,3],[1,2]]];
       const g=groups.map(group=>{
-        if(method==='random')return group.map(p=>p.name);
-        const s=[...group].sort((a,b)=>pts(b)-pts(a));
-        return [s[0].name,s[3].name,s[1].name,s[2].name]; // 균형: (최고+최저) vs (중간 둘), 앞2=A팀 뒤2=B팀
+        const s=method==='random'?group:[...group].sort((a,b)=>pts(b)-pts(a));
+        let best=prefer[0],bestScore=Infinity;
+        prefer.forEach((sp,idx)=>{const c1=pairCount.get(pk(s[sp[0][0]].id,s[sp[0][1]].id))||0,c2=pairCount.get(pk(s[sp[1][0]].id,s[sp[1][1]].id))||0,score=(c1+c2)*10+idx;if(score<bestScore){bestScore=score;best=sp;}}); // 반복 파트너 최소 우선, 동점이면 method 선호 순서
+        pairCount.set(pk(s[best[0][0]].id,s[best[0][1]].id),(pairCount.get(pk(s[best[0][0]].id,s[best[0][1]].id))||0)+1);
+        pairCount.set(pk(s[best[1][0]].id,s[best[1][1]].id),(pairCount.get(pk(s[best[1][0]].id,s[best[1][1]].id))||0)+1);
+        return [s[best[0][0]].name,s[best[0][1]].name,s[best[1][0]].name,s[best[1][1]].name];
       });
       out.push({round:r+1,method,g,rest:resting.map(p=>p.name)});
     }
