@@ -3,6 +3,7 @@ import images from './images.js';
 import { client } from './boards-client.js';
 import { css } from './boards-style.js';
 import { operatorLogin } from './operator-login.js';
+import { adminLogin, adminKeyFor } from './admin-login.js';
 import { ensureRankingMembers, orderRankingRows, rankingOnlyPeople, seedForPoints } from './rankings.js';
 
 const appPeople=[...people,...rankingOnlyPeople(people)];
@@ -146,19 +147,36 @@ async function unsettleSchedule(db,id){
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
 }
-function page(editor){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')});</script></body></html>`;
+// 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
+async function createBackup(env,kind){
+  await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
+  const posts=(await env.DB.prepare('SELECT id,kind,payload,version,last_operation,created_at,updated_at FROM board_posts ORDER BY created_at').all()).results;
+  const members=(await env.DB.prepare('SELECT * FROM ranking_members').all()).results;
+  const guests=(await env.DB.prepare('SELECT * FROM guests').all()).results;
+  const at=new Date().toISOString();
+  const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests});
+  const id='bk-'+at.replace(/[:.]/g,'-')+'-'+Math.random().toString(36).slice(2,6);
+  await env.DB.prepare('INSERT INTO backups (id,created_at,kind,data) VALUES (?,?,?,?)').bind(id,at,kind,data).run();
+  await env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(new Date(Date.now()-31*86400000).toISOString()).run();
+  return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
+}
+function page(editor,admin){
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
-  const editor=Boolean(key)&&path==='/operate-'+key?key:'';
+  const adminKey=await adminKeyFor(env);
+  const admin=Boolean(adminKey)&&path==='/administrate-'+adminKey?adminKey:'';
+  const editor=admin?key||'':(Boolean(key)&&path==='/operate-'+key?key:'');
   if(path==='/api/operator-login')return operatorLogin(request,env);
+  if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({people:appPeople});
     await ensureRankingMembers(env.DB,appPeople);
     await ensureGuests(env.DB);
-    const members=(await env.DB.prepare('SELECT member_id,name,seed,points FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:r.seed,points:r.points}));
+    const members=(await env.DB.prepare('SELECT member_id,name,seed,points,is_operator FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:r.seed,points:r.points,is_operator:r.is_operator}));
     const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses}));
     return json({people:[...members,...guests]});
   }
@@ -167,7 +185,7 @@ export default {async fetch(request,env){
       if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
         await ensureRankingMembers(env.DB,appPeople);
-        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
+        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
         const sourceDate='2026-09-10';
         const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
         const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
@@ -231,6 +249,35 @@ export default {async fetch(request,env){
         const rows=(await env.DB.prepare('SELECT * FROM ranking_members WHERE hidden=0').all()).results;
         await env.DB.batch(orderRankingRows(rows).map(r=>env.DB.prepare('UPDATE ranking_members SET rank=?,previous_rank=? WHERE member_id=?').bind(r.rank,r.rank,r.member_id)));
         return json({data:{promoted:chosen.length}});
+      }
+      // 요청 073: 관리자 — 운영진 임명/해제(왕관). 관리자 헤더(x-kokkiri-admin) 필요.
+      if(path==='/api/operator-role'&&request.method==='POST'){
+        if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 변경할 수 있습니다.'},403);
+        const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        const memberId=String(input.memberId||''),on=input.on?1:0;
+        if(!memberId)return json({error:'대상을 확인해주세요.'},400);
+        await ensureRankingMembers(env.DB,appPeople);
+        const r=await env.DB.prepare('UPDATE ranking_members SET is_operator=? WHERE member_id=? AND hidden=0').bind(on,memberId).run();
+        if(!r.meta.changes)return json({error:'대상 회원을 찾지 못했습니다.'},404);
+        return json({data:{memberId,is_operator:on}});
+      }
+      // 요청 074: 관리자 — 백업 목록/생성/다운로드.
+      if(path==='/api/backups'&&request.method==='GET'){
+        if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 볼 수 있습니다.'},403);
+        const {results}=await env.DB.prepare('SELECT id,created_at,kind,length(data) AS size FROM backups ORDER BY created_at DESC LIMIT 60').all();
+        return json({items:results});
+      }
+      if(path==='/api/backups'&&request.method==='POST'){
+        if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 백업할 수 있습니다.'},403);
+        return json({data:await createBackup(env,'manual')});
+      }
+      const bmatch=path.match(/^\/api\/backups\/([A-Za-z0-9-]{1,120})$/);
+      if(bmatch&&request.method==='GET'){
+        if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 받을 수 있습니다.'},403);
+        const row=await env.DB.prepare('SELECT data FROM backups WHERE id=?').bind(bmatch[1]).first();
+        if(!row)return json({error:'백업을 찾을 수 없습니다.'},404);
+        return new Response(row.data,{status:200,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','content-disposition':'attachment; filename="'+bmatch[1]+'.json"'}});
       }
       if(path==='/api/mvp'&&request.method==='GET'){
         const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
@@ -330,6 +377,9 @@ export default {async fetch(request,env){
       return json({data:unpack(row)});
     }catch(error){console.error('Board request failed',error);return json({error:'저장소에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
   }
-  if(path!=='/'&&!editor)return new Response('페이지를 찾을 수 없습니다.',{status:404});
-  return new Response(page(editor),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'}});
+  if(path!=='/'&&!editor&&!admin)return new Response('페이지를 찾을 수 없습니다.',{status:404});
+  return new Response(page(editor,admin),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'}});
+},async scheduled(event,env,ctx){
+  // 요청 074: 주간 자동 백업(Cron). 1개월 지난 백업은 createBackup 안에서 삭제.
+  try{if(env.DB)await createBackup(env,'auto');}catch(e){console.error('scheduled backup failed',e);}
 }};

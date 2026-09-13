@@ -1,4 +1,4 @@
-export function client(EDITOR){
+export function client(EDITOR,ADMIN){
   const $=id=>document.getElementById(id),app=$('app'),dialog=$('picker');
   const extraStyle=document.createElement('style');extraStyle.textContent='.ranking-table-wrap{overflow:auto}.ranking-table{width:100%;border-collapse:collapse;min-width:620px}.ranking-table th{background:#eafff1;color:#245c39;font-weight:700}.ranking-table th,.ranking-table td{padding:12px 14px;text-align:center;border-bottom:1px solid #e0ebe4;white-space:nowrap}.ranking-table th:nth-child(3),.ranking-table td:nth-child(3){text-align:left}.rank-movement{color:#e5484d;font-weight:700}.rank-down{color:#2f6fed;font-weight:700}.seed-badge{display:inline-block;min-width:2.7em;padding:2px 7px;border-radius:999px;background:#eafff1;color:#176337;font-weight:700}.match-result{display:flex;justify-content:center;align-items:center;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #dcece1}.result-label{width:100%;color:#587261;font-size:.875rem}.winner-button{padding:7px 10px;font-size:.875rem}.winner-button.selected{background:#03ac50;color:#fff;border-color:#03ac50}.settled-badge{display:inline-block;margin:8px 0;padding:4px 9px;border-radius:999px;background:#eafff1;color:#176337;font-size:.875rem;font-weight:600}@media(max-width:650px){.ranking-table th,.ranking-table td{padding:10px 9px}.winner-button{font-size:.8rem;padding:6px 8px}}';document.head.append(extraStyle);
   function updateDaysTogether(){
@@ -9,28 +9,34 @@ export function client(EDITOR){
     output.textContent=String(Math.max(1,Math.floor((today-since)/86400000)+1));
   }
   updateDaysTogether();setInterval(updateDaysTogether,60000);
-  if(!EDITOR){
-    const accessButton=document.createElement('button');
-    accessButton.className='operator-access';accessButton.textContent='운영진권한';
-    accessButton.setAttribute('aria-haspopup','dialog');document.body.append(accessButton);
-    accessButton.onclick=()=>{
-      dialog.innerHTML='<form id="operatorLogin"><div class="dialog-head"><h2 id="pickerTitle">운영진권한</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="operatorPassword">운영진 비밀번호</label><input id="operatorPassword" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">운영진 화면으로</button><button type="button" id="cancelLogin">취소</button></div></form>';
+  function loginButton(cls,label,title,fieldLabel,endpoint,redirectRe,goLabel){
+    const btn=document.createElement('button');
+    btn.className=cls;btn.textContent=label;btn.setAttribute('aria-haspopup','dialog');document.body.append(btn);
+    btn.onclick=()=>{
+      dialog.innerHTML='<form id="loginForm"><div class="dialog-head"><h2 id="pickerTitle">'+esc(title)+'</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="loginPw">'+esc(fieldLabel)+'</label><input id="loginPw" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">'+esc(goLabel)+'</button><button type="button" id="cancelLogin">취소</button></div></form>';
       const close=()=>dialog.close();$('closeLogin').onclick=close;$('cancelLogin').onclick=close;
-      $('operatorLogin').onsubmit=async e=>{
+      $('loginForm').onsubmit=async e=>{
         e.preventDefault();const submit=$('loginSubmit');if(submit.disabled)return;
         submit.disabled=true;submit.textContent='확인 중…';$('loginError').textContent='';
         try{
-          const result=await api('/api/operator-login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('operatorPassword').value})});
-          if(!/^\/operate-[a-zA-Z0-9_-]+$/.test(result.redirect))throw Error('운영진 주소를 확인하지 못했습니다.');
+          const result=await api(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('loginPw').value})});
+          if(!redirectRe.test(result.redirect||''))throw Error('주소를 확인하지 못했습니다.');
           location.assign(result.redirect);
-        }catch(error){$('loginError').textContent=error.message;$('operatorPassword').focus();$('operatorPassword').select();}
-        finally{submit.disabled=false;submit.textContent='운영진 화면으로';}
+        }catch(error){$('loginError').textContent=error.message;$('loginPw').focus();$('loginPw').select();}
+        finally{submit.disabled=false;submit.textContent=goLabel;}
       };
-      dialog.onclose=()=>{dialog.innerHTML='';accessButton.focus();};dialog.showModal();
+      dialog.onclose=()=>{dialog.innerHTML='';btn.focus();};dialog.showModal();
     };
+    return btn;
+  }
+  if(!EDITOR&&!ADMIN){
+    loginButton('operator-access','운영진권한','운영진권한','운영진 비밀번호','/api/operator-login',/^\/operate-[a-zA-Z0-9_-]+$/,'운영진 화면으로');
+    loginButton('operator-access admin-access','홈페이지관리자 권한','홈페이지관리자 권한','관리자 비밀번호','/api/admin-login',/^\/administrate-[a-zA-Z0-9_-]+$/,'관리자 화면으로');
   }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
+  // 요청 073: 운영진(왕관)은 DB(is_operator)로 관리. 초기값은 아래 6명, 데이터 로드 시 갱신.
+  let OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
+  function syncOperators(list){const ms=(list||[]).filter(p=>p.type==='member'||('member_id' in p));if(ms.length&&('is_operator' in ms[0]))OPERATORS=new Set(ms.filter(p=>p.is_operator).map(p=>p.name));}
   const crown=name=>OPERATORS.has(name)?'<span class="crown" title="운영진" aria-label="운영진">👑</span>':'';
   const nameHTML=name=>{const s=String(name??''),m=/^(.*[^\s])\(([^)\s]+)\)$/.exec(s);return m?esc(m[1])+'<span class="region">'+esc(m[2])+'</span>':esc(s);};
   const seedHTML=seed=>{const s=String(seed==null?'':seed),m=/^(.*[^+\-])([+\-])$/.exec(s);return m?esc(m[1])+'<sup class="seed-mod">'+esc(m[2])+'</sup>':esc(s);};
@@ -66,7 +72,7 @@ export function client(EDITOR){
   const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}};
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
-  async function getPeople(){if(!people.length)people=(await api('/api/people')).people;return people;}
+  async function getPeople(){if(!people.length){people=(await api('/api/people')).people;syncOperators(people);}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
   async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">✨ 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' · '))+'</span></a>';}}catch(e){}}
@@ -261,7 +267,7 @@ export function client(EDITOR){
   async function seeds(token){
     let type='member',editing=false;const checked=new Set();
     async function load(){await getPeople();const rd=await api('/api/rankings');if(token!==routeToken)return null;return rd;}
-    let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;
+    let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;syncOperators(ranking);
     const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
     function movement(row){if(row.previous_rank===row.rank)return '<span class="muted">-</span>';return row.previous_rank>row.rank?'<span class="rank-movement">▲ '+(row.previous_rank-row.rank)+'</span>':'<span class="rank-down">▼ '+(row.rank-row.previous_rank)+'</span>';}
     function pointsMove(row){if(row.previous_points==null||row.previous_points===row.points)return '';const d=row.points-row.previous_points;return d>0?'<span class="pts-delta rank-movement">▲'+d+'</span>':'<span class="pts-delta rank-down">▼'+(-d)+'</span>';}
@@ -274,7 +280,8 @@ export function client(EDITOR){
       const cb=id=>editing?'<td><input type="checkbox" class="seed-cb" data-id="'+esc(id)+'"'+(checked.has(id)?' checked':'')+'></td>':'';
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';
-        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
+        const opBtn=row=>ADMIN?'<button type="button" class="op-toggle'+(row.is_operator?' on':'')+'" data-mid="'+esc(row.member_id)+'" data-on="'+(row.is_operator?1:0)+'">'+(row.is_operator?'운영진 해제':'운영진 임명')+'</button>':'';
+        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+opBtn(row)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>(b.points||0)-(a.points||0)||a.i-b.i).map((p,idx)=>({...p,rank:idx+1}));
@@ -285,9 +292,11 @@ export function client(EDITOR){
       chk();
     }
     function paint(){
-      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다</p>'+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
+      const adminPanel=ADMIN?'<div class="admin-panel"><div class="admin-head">홈페이지 관리자</div><p class="admin-note">아래 회원 표에서 <b>운영진 임명/해제</b>로 왕관을 달거나 뗄 수 있어요. 공지·대진·시드 백업은 매주 자동 저장되고 1개월간 보관됩니다.</p><div class="sticky-actions"><button id="backupNow" class="primary">지금 백업</button></div><div id="backupList" class="backup-list">불러오는 중…</div></div>':'';
+      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다</p>'+adminPanel+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
       $('seedMembers').onclick=()=>{type='member';checked.clear();render();};$('seedGuests').onclick=()=>{type='guest';checked.clear();render();};$('seedSearch').oninput=render;
       if(EDITOR)$('seedEdit').onclick=()=>{editing=!editing;checked.clear();paint();};
+      if(ADMIN){$('backupNow').onclick=doBackup;$('backupList').addEventListener('click',e=>{const d=e.target.closest('.backup-dl');if(d)downloadBackup(d.dataset.id);});renderBackups();$('seedList').addEventListener('click',e=>{const t=e.target.closest('.op-toggle');if(t)toggleOperator(t.dataset.mid,t.dataset.on==='1'?0:1);});}
       if(editing){$('seedList').addEventListener('change',e=>{const c=e.target.closest('.seed-cb');if(!c)return;if(c.checked)checked.add(c.dataset.id);else checked.delete(c.dataset.id);chk();});$('seedAdd').onclick=addPerson;$('seedDelete').onclick=deleteSelected;$('seedPromote').onclick=promoteSelected;}
       render();
     }
@@ -303,6 +312,17 @@ export function client(EDITOR){
       if(!confirm(checked.size+'명을 회원으로 이관할까요? 점수·출석·승·패 기록을 그대로 회원 명단으로 옮깁니다.'))return;
       try{await api('/api/people/promote',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({ids:[...checked]})});message('회원으로 이관했어요.');await refresh();}catch(e){message(e.message,true);}
     }
+    async function toggleOperator(mid,on){
+      try{await api('/api/operator-role',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-admin':ADMIN},body:JSON.stringify({memberId:mid,on})});message(on?'운영진으로 임명했어요.':'운영진에서 해제했어요.');await refresh();}catch(e){message(e.message,true);}
+    }
+    async function renderBackups(){
+      const box=$('backupList');if(!box)return;
+      try{const {items}=await api('/api/backups',{headers:{'x-kokkiri-admin':ADMIN}});
+        box.innerHTML=items.length?items.map(b=>'<div class="backup-row"><span>'+esc(date(b.created_at))+' · '+(b.kind==='auto'?'자동':'수동')+' · '+Math.max(1,Math.round((b.size||0)/1024))+'KB</span><button type="button" class="backup-dl" data-id="'+esc(b.id)+'">다운로드</button></div>').join(''):'<p class="muted">아직 저장된 백업이 없어요. \'지금 백업\'을 눌러 만들 수 있어요.</p>';
+      }catch(e){box.innerHTML='<p class="muted">'+esc(e.message)+'</p>';}
+    }
+    async function doBackup(){const b=$('backupNow');if(!b)return;b.disabled=true;b.textContent='백업 중…';try{await api('/api/backups',{method:'POST',headers:{'x-kokkiri-admin':ADMIN}});message('공지·대진·시드를 백업했어요.');await renderBackups();}catch(e){message(e.message,true);}finally{b.disabled=false;b.textContent='지금 백업';}}
+    async function downloadBackup(id){try{const r=await fetch('/api/backups/'+encodeURIComponent(id),{headers:{'x-kokkiri-admin':ADMIN}});if(!r.ok)throw Error('백업을 받지 못했어요.');const blob=await r.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=id+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);}catch(e){message(e.message,true);}}
     function addPerson(){
       dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">사람 추가</h2><button id="closeAdd" aria-label="닫기">×</button></div><label>닉네임<input id="addName" maxlength="100" placeholder="닉네임"></label><label>시드 점수<input id="addPoints" type="number" min="0" max="1000" placeholder="예: 90"></label><div class="tabs"><button type="button" id="addTypeM" aria-pressed="true">회원</button><button type="button" id="addTypeG" aria-pressed="false">게스트</button></div><button id="addConfirm" class="primary">확인</button>';
       let atype='member';

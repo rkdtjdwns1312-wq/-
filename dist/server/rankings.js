@@ -19,6 +19,8 @@ export const initialRankingRows=[
   ['텐텐',20,62]
 ].map(([name,points,sourceRank])=>({name,points,sourceRank}));
 
+// 요청 073: 초기 운영진(왕관) 6명. 이후 임명/해제는 ranking_members.is_operator로 관리(관리자 권한).
+export const INITIAL_OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
 const seedBands=[['S',150],['A+',120],['A',100],['B+',90],['B',80],['C+',70],['C',60],['D+',50],['D',40],['E+',30],['E',20],['E-',0]];
 export function seedForPoints(points){return seedBands.find(([,minimum])=>points>=minimum)?.[0]||'E-';}
 const normalizeName=name=>String(name??'').replace(/\(부재\)$/,'').trim();
@@ -48,14 +50,14 @@ export function buildInitialRankings(people){
     used.add(person.id);
   }
   rows.sort((a,b)=>a.sourceRank-b.sourceRank||a.name.localeCompare(b.name,'ko'));
-  return rows.map((row,index)=>({...row,rank:index+1,previousRank:index+1,attendance:0,wins:0,losses:0}));
+  return rows.map((row,index)=>({...row,rank:index+1,previousRank:index+1,attendance:0,wins:0,losses:0,isOperator:INITIAL_OPERATORS.has(normalizeName(row.name))?1:0}));
 }
 
 export async function ensureRankingMembers(db,people){
   const initial=buildInitialRankings(people);
   await db.batch(initial.map(row=>db.prepare(`INSERT OR IGNORE INTO ranking_members
-    (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(row.memberId,row.name,row.points,row.seed,row.rank,row.previousRank,row.points,row.attendance,row.wins,row.losses,'2026-09-10T00:00:00.000Z')));
+    (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(row.memberId,row.name,row.points,row.seed,row.rank,row.previousRank,row.points,row.attendance,row.wins,row.losses,row.isOperator||0,'2026-09-10T00:00:00.000Z')));
 }
 
 export function orderRankingRows(rows){
