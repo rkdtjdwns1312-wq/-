@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password'};
 const origin='http://localhost:4173';
@@ -30,7 +30,7 @@ const sio=rankingData.items.find(row=>row.name==='시오'),newMember=rankingData
 // 주밤(115)·로토(104): the sheet said A+, the operator confirmed A on 2026-09-12; seeds follow the points rule everywhere, including the roster shown to operators.
 const jubam=rankingData.items.find(row=>row.name==='주밤'),roto=rankingData.items.find(row=>row.name==='로토');assert.equal(jubam.points,115);assert.equal(jubam.seed,'A');assert.equal(roto.points,104);assert.equal(roto.seed,'A');
 const peopleData=await (await worker.fetch(new Request(origin+'/api/people'),env)).json();assert.equal(peopleData.people.find(p=>p.name==='주밤').seed,'A');assert.equal(peopleData.people.find(p=>p.name==='로토').seed,'A');
-const guestPeople=peopleData.people.filter(p=>p.type==='guest');assert.equal(guestPeople.length,32);assert.ok(guestPeople.every(p=>Number.isInteger(p.points)));assert.equal(guestPeople.find(p=>p.name==='몽구').points,125);assert.equal(guestPeople.find(p=>p.name==='우니').points,17);
+const guestPeople=peopleData.people.filter(p=>p.type==='guest');assert.equal(guestPeople.length,35);assert.ok(guestPeople.every(p=>Number.isInteger(p.points)));assert.equal(guestPeople.find(p=>p.name==='몽구').points,125);assert.equal(guestPeople.find(p=>p.name==='우니').points,17);
 // 요청 045: 회원 명단의 (부재)·(서울) 표기 제거
 assert.ok(rankingData.items.every(r=>!/\((?:서울|부재)\)/.test(r.name)),'회원 랭킹 이름에 (부재)/(서울)가 없어야 합니다');
 assert.equal(rankingData.items.find(r=>r.name==='덕자').points,60);assert.equal(rankingData.items.find(r=>r.name==='우민').points,40);
@@ -47,11 +47,11 @@ const addM=await addP('추가회원','member',55);assert.equal(addM.status,200);
 const rkA=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();assert.equal(rkA.items.length,62);assert.ok(rkA.items.some(r=>r.name==='추가회원'&&r.seed==='D+'));
 assert.equal((await addP('추가회원','member',10)).status,409);
 const addG=await addP('추가게스트','guest',30);assert.equal(addG.status,200);const addGId=(await addG.json()).data.id;
-const ppA=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.ok(ppA.some(p=>p.name==='추가게스트'&&p.type==='guest'&&p.seed==='E+'));assert.equal(ppA.filter(p=>p.type==='guest').length,33);
+const ppA=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.ok(ppA.some(p=>p.name==='추가게스트'&&p.type==='guest'&&p.seed==='E+'));assert.equal(ppA.filter(p=>p.type==='guest').length,36);
 assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({ids:[addMId,addGId]})}),env)).status,200);
 const rkB=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();assert.equal(rkB.items.length,61);assert.ok(!rkB.items.some(r=>r.name==='추가회원'));
 assert.ok(rkB.items.map(r=>r.rank).every((v,i)=>v===i+1),'삭제 후에도 회원 순위가 1..N 연속이어야 합니다');
-const ppB=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.equal(ppB.filter(p=>p.type==='guest').length,32);assert.equal(ppB.filter(p=>p.type==='member').length,61);
+const ppB=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.equal(ppB.filter(p=>p.type==='guest').length,35);assert.equal(ppB.filter(p=>p.type==='member').length,61);
 assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST'}),env)).status,403);
 const schedule={id:'ranking-test',kind:'schedule',version:0,title:'점수 계산 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
 const put=(version,data)=>worker.fetch(new Request(origin+'/api/posts/ranking-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
@@ -129,6 +129,17 @@ const aB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).js
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/absent-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:1,operation:'settle-abs'})}),env)).status,200);
 const aA=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,aap=n=>aA.find(r=>r.name===n).points;
 assert.equal(aap('호잇')-abv.h,2);assert.equal(aap('뚜기')-abv.t,2);assert.equal(aap('주밤')-abv.j,0);assert.equal(aap('로토')-abv.l,0);assert.equal(aap('시오')-abv.s,1);assert.equal(aap('백구')-abv.b,0);
+// 요청 063: 9월 12일 토요일 정모 대진표(마이그레이션 게시) 로드·정산 검증
+const jm=(await (await worker.fetch(new Request(origin+'/api/posts/jeongmo-2026-09-12'),env)).json()).data;
+assert.equal(jm.title,'9월 12일 토요일 정모');assert.equal(jm.names.length,28);assert.equal(jm.schedule.length,5);assert.deepEqual(jm.absent,['텐텐']);assert.equal(jm.schedule[4].g.length,8);
+const jmGuests=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people.filter(p=>p.type==='guest'&&['아식스','제냐','허니'].includes(p.name));assert.equal(jmGuests.length,3);assert.equal(jmGuests.find(p=>p.name==='아식스').seed,'A');
+const jmB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,jbp=n=>{const r=jmB.find(x=>x.name===n);return r?r.points:null;};
+const rotoB=jbp('로토'),chilB=jbp('곽동칠');
+const jmSettle=await worker.fetch(new Request(origin+'/api/posts/jeongmo-2026-09-12/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:jm.version,operation:'settle-jeongmo'})}),env);
+assert.equal(jmSettle.status,200);const jmData=(await jmSettle.json()).data;
+const jmA=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,jap=n=>jmA.find(x=>x.name===n).points;
+assert.equal(jap('로토')-rotoB,5);assert.equal(jap('곽동칠')-chilB,-3);
+assert.deepEqual([...jmData.mvp].sort(),['동이','로토','소고기','시오','슝슝이','야키'].sort());
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
