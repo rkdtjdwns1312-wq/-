@@ -95,12 +95,20 @@ assert.equal(w2data.title,'웨이브2 테스트');assert.deepEqual([...w2data.mv
 assert.ok(w2data.settledAt);
 const mvpApi=await (await worker.fetch(new Request(origin+'/api/mvp'),env)).json();
 assert.equal(mvpApi.id,'wave2-test');assert.deepEqual([...mvpApi.mvp].sort(),['구구','시오']);assert.ok(mvpApi.settledAt);
+// 요청 083: 목록에서 MVP를 표시하므로 상세와 같은 명단을 배열로 반환한다.
+const w2List=(await (await worker.fetch(new Request(origin+'/api/posts?kind=schedule'),env)).json()).items.find(p=>p.id==='wave2-test');
+assert.equal(w2List.title,'웨이브2 테스트');assert.equal(w2List.settledAt,w2data.settledAt);assert.deepEqual(w2List.mvp,w2data.mvp);
+assert.equal(Object.hasOwn(w2List,'mvp_json'),false);
+const noticeMvpList=(await (await worker.fetch(new Request(origin+'/api/posts?kind=notice'),env)).json()).items;
+assert.ok(noticeMvpList.length>0);assert.ok(noticeMvpList.every(p=>Array.isArray(p.mvp)&&p.mvp.length===0));
 assert.equal((await postResult({key:'0-0',winner:'b'})).status,409);
 // 요청 053: 마감 취소(가장 최근 마감 되돌리기)
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST'}),env)).status,403);
 const beforeUn=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,upBp=n=>beforeUn.find(r=>r.name===n).points;
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
 const w2after=await getW2();assert.equal(w2after.settledAt,null);assert.deepEqual(w2after.mvp,[]);assert.ok(!(w2after.title||'').includes('MVP'));
+const w2ListAfter=(await (await worker.fetch(new Request(origin+'/api/posts?kind=schedule'),env)).json()).items.find(p=>p.id==='wave2-test');
+assert.equal(w2ListAfter.settledAt,null);assert.deepEqual(w2ListAfter.mvp,[]);
 const afterUn=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,unAp=n=>afterUn.find(r=>r.name===n).points;
 assert.equal(upBp('시오')-unAp('시오'),2);assert.equal(upBp('구구')-unAp('구구'),2);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/wave2-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,400);

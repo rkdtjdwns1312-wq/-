@@ -356,8 +356,12 @@ export default {async fetch(request,env){
         const kind=url.searchParams.get('kind');
         if(!['schedule','notice'].includes(kind))return json({error:'게시판을 확인해주세요.'},400);
         const offset=Math.max(0,Math.min(1000000,Math.floor(Number(url.searchParams.get('offset')))||0));
-        const {results}=await env.DB.prepare('SELECT id,kind,COALESCE(json_extract(payload,\'$.preTitle\'),json_extract(payload,\'$.title\')) AS title,json_extract(payload,\'$.settledAt\') AS settledAt,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
-        return json({items:results.slice(0,30),hasMore:results.length>30});
+        const {results}=await env.DB.prepare('SELECT id,kind,COALESCE(json_extract(payload,\'$.preTitle\'),json_extract(payload,\'$.title\')) AS title,json_extract(payload,\'$.settledAt\') AS settledAt,json_extract(payload,\'$.mvp\') AS mvp_json,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
+        const items=results.slice(0,30).map(({mvp_json,...post})=>{
+          const mvp=mvp_json?JSON.parse(mvp_json):[];
+          return {...post,mvp:Array.isArray(mvp)?mvp:[]};
+        });
+        return json({items,hasMore:results.length>30});
       }
       const match=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})$/);
       if(!match)return json({error:'찾을 수 없는 요청입니다.'},404);
