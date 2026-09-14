@@ -6,6 +6,9 @@ import { operatorLogin } from './operator-login.js';
 import { adminLogin, adminKeyFor } from './admin-login.js';
 import { orderRankingRows, seedForPoints } from './rankings.js';
 import { readWeeklyResults } from './weekly-results.js';
+import { liveCourts } from './live-courts.js';
+import { createLiveView } from './live-client.js';
+import { liveCss } from './live-style.js';
 
 // 명단 변경은 현재 순위만 다시 매긴다. 정모 증감·보호 표시와 이전 순위는 보존한다.
 async function reorderMembers(db){
@@ -118,8 +121,10 @@ async function settleSchedule(db,id,input){
   // 요청 078: 마감해도 제목은 그대로 두고, MVP는 mvp[]로만 저장한다(화면에서 제목 아래 작게 표시).
   const nextPayload={...post,results,settledAt:at,mvp:mvpNames,title:post.title,preTitle:post.title};
   const statements=[
-    db.prepare('INSERT INTO ranking_settlements (schedule_id,settled_at,operation,rank_order_before) VALUES (?,?,?,?)').bind(id,at,input.operation,JSON.stringify(rankingRows.map(r=>r.member_id))),
-    db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version)
+    db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version),
+    // D1 batch is transactional: a failed version claim must abort ALL scoring.
+    // The NOT NULL guard fails before any points/events are written.
+    db.prepare("INSERT INTO ranking_settlements (schedule_id,settled_at,operation,rank_order_before) VALUES (CASE WHEN EXISTS (SELECT 1 FROM board_posts WHERE id=? AND kind='schedule' AND version=? AND last_operation=?) THEN ? ELSE NULL END,?,?,?)").bind(id,input.version+1,'settle-'+input.operation,id,at,input.operation,JSON.stringify(rankingRows.map(r=>r.member_id)))
   ];
   for(const next of nextRows){
     const before=byId.get(next.member_id),d=deltas.get(next.member_id);
@@ -130,7 +135,12 @@ async function settleSchedule(db,id,input){
   statements.push(db.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0'));
   for(const g of gNext){if(!gDeltas.has(g.guest_id))continue;statements.push(db.prepare('UPDATE guests SET points=?,previous_points=?,attendance=?,wins=?,losses=?,rank_protected=?,floor_protected_at=? WHERE guest_id=?').bind(g.points,gById.get(g.guest_id).points,g.attendance,g.wins,g.losses,g.rank_protected,g.floor_protected_at,g.guest_id));}
   for(const [gid,d] of gDeltas){const before=gById.get(gid),after=gNext.find(g=>g.guest_id===gid);statements.push(db.prepare('INSERT INTO guest_events (schedule_id,guest_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,created_at,floor_protected_before) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id,gid,d.attendance,d.wins,d.losses,after.points-before.points,before.points,after.points,at,before.floor_protected_at));}
-  await db.batch(statements);
+  try{await db.batch(statements);}catch(error){
+    const latest=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
+    if(latest&&JSON.parse(latest.payload).settledAt)return json({data:unpack(latest)});
+    if(!latest||latest.version!==input.version)return json({error:'다른 기기에서 대진이 변경되었습니다. 최신 내용을 확인한 뒤 다시 마감해주세요.',conflict:true},409);
+    throw error;
+  }
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
 }
@@ -191,7 +201,7 @@ async function createBackup(env,kind){
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -199,6 +209,7 @@ export default {async fetch(request,env){
   const admin=Boolean(adminKey)&&path==='/administrate-'+adminKey?adminKey:'';
   const editor=admin?key||'':(Boolean(key)&&path==='/operate-'+key?key:'');
   if(path==='/api/operator-login')return operatorLogin(request,env);
+  if(path==='/api/live-courts')return liveCourts(request,env);
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path==='/api/people'&&request.method==='GET'){
@@ -372,6 +383,31 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 마감을 취소할 수 있습니다.'},403);
         return unsettleSchedule(env.DB,unsettleMatch[1]);
       }
+      const progressMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/progress$/);
+      if(progressMatch){
+        if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
+        const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        if(!input||typeof input.key!=='string'||!/^(0|[1-9]\d{0,2})-(0|[1-9]\d{0,2})$/.test(input.key)||!['waiting','playing','finished'].includes(input.state)||!Number.isInteger(input.version)||input.version<1)return json({error:'대진 진행 정보를 확인해주세요.'},400);
+        const row=await env.DB.prepare("SELECT * FROM board_posts WHERE id=? AND kind='schedule'").bind(progressMatch[1]).first();
+        if(!row)return json({error:'대진표를 찾을 수 없습니다.'},404);
+        const post=unpack(row),[ri,mi]=input.key.split('-').map(Number),round=post.schedule[ri],match=round?.g?.[mi];
+        if(post.settledAt)return json({error:'마감된 대진의 진행 상태는 바꿀 수 없습니다.'},409);
+        if(row.version!==input.version)return json({error:'다른 기기에서 먼저 기록했어요. 최신 대진을 확인한 뒤 다시 눌러주세요.',conflict:true},409);
+        if(!Array.isArray(match)||match.length!==4)return json({error:'없는 경기입니다.'},400);
+        const state=scheduleTools.matchState(post,ri,mi);
+        if(state==='void')return json({error:'무효 경기의 진행 상태는 바꿀 수 없습니다.'},400);
+        if(validResult(post.results?.[input.key]))return json({error:'승패가 기록된 경기는 대진종료 상태입니다.'},409);
+        if(input.state==='finished'&&round.method!=='random')return json({error:'이긴 팀의 승 버튼으로 대진을 종료해주세요.'},400);
+        if(input.state==='finished'&&state==='waiting')return json({error:'대진을 시작한 뒤 종료해주세요.'},400);
+        if(input.state===state)return json({data:{key:input.key,state,version:row.version}});
+        const matchProgress=scheduleTools.cleanProgress(post);
+        if(input.state==='waiting')delete matchProgress[input.key];else matchProgress[input.key]=input.state;
+        const merged={...post,matchProgress},at=new Date().toISOString();
+        const updated=await env.DB.prepare("UPDATE board_posts SET payload=?,version=version+1,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(merged),at,progressMatch[1],input.version).run();
+        if(!updated.meta.changes)return json({error:'다른 기기에서 먼저 기록했어요. 최신 대진을 확인한 뒤 다시 눌러주세요.',conflict:true},409);
+        return json({data:{key:input.key,state:input.state,version:row.version+1}});
+      }
       const resultMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/result$/);
       if(resultMatch){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
@@ -388,6 +424,7 @@ export default {async fetch(request,env){
         if(round.method==='random')return json({error:'랜덤 경기는 승패를 기록하지 않습니다.'},400);
         if(Array.isArray(post.absent)&&round.g[mi].some(n=>post.absent.includes(n)))return json({error:'불참자가 있는 무효 경기는 승패를 기록하지 않습니다.'},400);
         const merged={...post,results:{...(post.results||{}),[rkey]:winner}};
+        merged.matchProgress=scheduleTools.cleanProgress(merged);
         const at=new Date().toISOString();
         const upd=await env.DB.prepare("UPDATE board_posts SET payload=?,version=version+1,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(merged),at,resultMatch[1],row.version).run();
         if(!upd.meta.changes)return json({error:'다른 기기에서 먼저 기록했어요. 잠시 후 다시 눌러주세요.',conflict:true},409);
@@ -434,9 +471,20 @@ export default {async fetch(request,env){
         if(!['schedule','notice'].includes(input.kind)||!Number.isInteger(input.version)||input.version<0||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('저장 요청을 확인해주세요.');
         payload=validate(input.data,input.kind);
       }catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
+      if(input.kind==='schedule')payload.matchProgress={};
       if(input.kind==='schedule'&&input.version>0){
         const existing=await env.DB.prepare('SELECT payload FROM board_posts WHERE id=? AND kind=\'schedule\'').bind(id).first();
         if(existing&&JSON.parse(existing.payload).settledAt)return json({error:'이미 점수가 반영된 대진표는 변경할 수 없습니다.'},409);
+        if(existing){
+          const previous=JSON.parse(existing.payload);
+          // A saved edit may retain progress only for the exact same game.
+          // Ignore incoming progress from stale tabs or copied schedules.
+          const progress=scheduleTools.cleanProgress({...payload,matchProgress:previous.matchProgress});
+          for(const [pkey,state] of Object.entries(progress)){
+            const [ri,mi]=pkey.split('-').map(Number);
+            if(previous.schedule[ri]?.method===payload.schedule[ri]?.method&&JSON.stringify(previous.schedule[ri]?.g?.[mi])===JSON.stringify(payload.schedule[ri]?.g?.[mi]))payload.matchProgress[pkey]=state;
+          }
+        }
       }
       const at=new Date().toISOString();
       const result=input.version===0

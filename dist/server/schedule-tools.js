@@ -15,6 +15,7 @@ export function createScheduleTools(){
     if(match.some((name,i)=>i!==si&&name===next))throw Error('같은 경기에는 한 사람을 두 번 넣을 수 없어요. 다른 경기의 중복 출전은 가능해요.');
     match[si]=next;
     if(d.results)delete d.results[ri+'-'+mi];
+    if(d.matchProgress)delete d.matchProgress[ri+'-'+mi];
     refreshRound(d,ri);
   }
   function generate(roster,courts,rounds,methods){
@@ -61,5 +62,24 @@ export function createScheduleTools(){
     }
     return out;
   }
-  return {availableNames,refreshRound,replacePlayer,generate};
+  function matchState(d,ri,mi){
+    const match=d.schedule?.[ri]?.g?.[mi],key=ri+'-'+mi;
+    if(!match)return 'waiting';
+    if(match.some(name=>(d.absent||[]).includes(name)))return 'void';
+    if(d.settledAt||['a','b'].includes(d.results?.[key]))return 'finished';
+    const state=d.matchProgress?.[key];
+    return state==='playing'?'playing':state==='finished'&&d.schedule[ri].method==='random'?'finished':'waiting';
+  }
+  function cleanProgress(d){
+    const out={};
+    if(!d.matchProgress||typeof d.matchProgress!=='object'||Array.isArray(d.matchProgress))return out;
+    for(const [key,state] of Object.entries(d.matchProgress)){
+      if(!/^(0|[1-9]\d{0,2})-(0|[1-9]\d{0,2})$/.test(key))continue;
+      const [ri,mi]=key.split('-').map(Number),match=d.schedule?.[ri]?.g?.[mi];
+      if(!match||d.settledAt||['a','b'].includes(d.results?.[key])||match.some(n=>(d.absent||[]).includes(n)))continue;
+      if(state==='playing'||(state==='finished'&&d.schedule[ri].method==='random'))out[key]=state;
+    }
+    return out;
+  }
+  return {availableNames,refreshRound,replacePlayer,generate,matchState,cleanProgress};
 }

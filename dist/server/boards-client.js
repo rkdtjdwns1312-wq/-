@@ -1,4 +1,4 @@
-export function client(EDITOR,ADMIN,createScheduleTools){
+export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   const scheduleTools=createScheduleTools();
   const $=id=>document.getElementById(id),app=$('app'),dialog=$('picker');
   const extraStyle=document.createElement('style');extraStyle.textContent='.ranking-table-wrap{overflow:auto}.ranking-table{width:100%;border-collapse:collapse;min-width:620px}.ranking-table th{background:#eafff1;color:#245c39;font-weight:700}.ranking-table th,.ranking-table td{padding:12px 14px;text-align:center;border-bottom:1px solid #e0ebe4;white-space:nowrap}.ranking-table th:nth-child(3),.ranking-table td:nth-child(3){text-align:left}.rank-movement{color:#e5484d;font-weight:700}.rank-down{color:#2f6fed;font-weight:700}.seed-badge{display:inline-block;min-width:2.7em;padding:2px 7px;border-radius:999px;background:#eafff1;color:#176337;font-weight:700}.match-result{display:flex;justify-content:center;align-items:center;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #dcece1}.result-label{width:100%;color:#587261;font-size:.875rem}.winner-button{padding:7px 10px;font-size:.875rem}.winner-button.selected{background:#03ac50;color:#fff;border-color:#03ac50}.settled-badge{display:inline-block;margin:8px 0;padding:4px 9px;border-radius:999px;background:#eafff1;color:#176337;font-size:.875rem;font-weight:600}@media(max-width:650px){.ranking-table th,.ranking-table td{padding:10px 9px}.winner-button{font-size:.8rem;padding:6px 8px}}';extraStyle.textContent+='.seed-actions{display:inline-flex;gap:4px;margin-left:7px;vertical-align:middle}.person-manage{padding:3px 7px;font-size:.68rem;border-radius:999px;font-weight:700}.history-list{list-style:none;padding:0;margin:10px 0}.history-list li{padding:10px 0;border-bottom:1px solid #e0ebe4;font-size:.88rem}.history-list li:last-child{border-bottom:0}.history-meta{display:block;color:#708078;font-size:.78rem;margin-bottom:2px}.history-reason{display:block;color:#4f6759;margin-top:3px;overflow-wrap:anywhere}';document.head.append(extraStyle);
@@ -63,6 +63,7 @@ export function client(EDITOR,ADMIN,createScheduleTools){
       const text=line.trim();
       let m;
       if(m=text.match(/^(\d{1,2})[.)]\s*(.+)$/)){closeList();parts.push('<h2 class="nb-section"><span class="nb-num">'+esc(m[1])+'</span><span>'+esc(m[2])+'</span></h2>');continue;}
+      if(m=text.match(/^🔴\s*(.+)$/)){closeList();parts.push('<h2 class="nb-section nb-section-alert"><span>'+esc(m[1])+'</span></h2>');continue;}
       if(m=text.match(/^\[(.+)\]$/)){closeList();parts.push('<h3 class="nb-sub">'+esc(m[1])+'</h3>');continue;}
       if(/^\d{1,2}월$/.test(text)){closeList();parts.push('<p class="nb-month">'+esc(text)+'</p>');continue;}
       if(m=text.match(/^(?:(▶|►|▸|▷|•|・|·|ㄴ)\s*|(-|–)\s+)(.+)$/)){m=[m[0],m[1]||m[2],m[3]];if(!list){parts.push('<ul class="nb-list">');list=true;}parts.push('<li>'+esc(m[2])+'</li>');continue;}
@@ -78,13 +79,15 @@ export function client(EDITOR,ADMIN,createScheduleTools){
     return parts.join('');
   }
   let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false;
-  const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}};
+  let liveView=null;
+  const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
+  if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
   async function getPeople(){if(!people.length){people=(await api('/api/people')).people;syncOperators(people);}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
-  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-num">01</span><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-num">02</span><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#seed"><span class="menu-num">03</span><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
+  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
     if(EDITOR)$('newPost').onclick=()=>kind==='schedule'?openPicker(null):editNotice({id:crypto.randomUUID(),kind,version:0,title:'',body:''});
@@ -102,6 +105,16 @@ export function client(EDITOR,ADMIN,createScheduleTools){
   }
   function winBtn(key,side,result,locked){
     return '<button type="button" class="win-pick'+(result===side?' picked':'')+'" data-result-key="'+key+'" data-winner="'+side+'" aria-pressed="'+(result===side)+'"'+(locked?' disabled':'')+' aria-label="이 팀 승리">승</button>';
+  }
+  function matchStateControl(d,r,ri,mi,key,state){
+    const labels={waiting:'대기중',playing:'대진중',finished:'대진종료',void:'무효'};
+    const court=(mi+1)+'번 대진',round=esc(r.round)+'라운드';
+    let next=null,action='확인';
+    if(state==='waiting'){next='playing';action='대진중으로 변경';}
+    else if(state==='playing'){next=r.method==='random'?'finished':'waiting';action=next==='finished'?'대진종료로 변경':'실수로 시작한 대진을 대기중으로 되돌리기';}
+    else if(state==='finished'&&r.method==='random'&&!d.settledAt){next='waiting';action='대기중으로 되돌리기';}
+    const aria=round+' '+court+', 현재 '+labels[state]+(next?', 누르면 '+action:'');
+    return next?'<button type="button" class="match-state state-'+state+'" data-progress-key="'+key+'" data-progress-next="'+next+'" data-progress-round="'+ri+'" data-progress-match="'+mi+'" aria-label="'+aria+'" title="'+action+'">'+labels[state]+'</button>':'<span class="match-state state-'+state+'" aria-label="'+aria+'">'+labels[state]+'</span>';
   }
   function scheduleHTML(d,editing=false,showResults=false){
     const results=d.results||{};
@@ -121,7 +134,7 @@ export function client(EDITOR,ADMIN,createScheduleTools){
       const waiting=Array.isArray(r.late)?r.late:[];
       const empty=r.g.length===0?'<p class="round-empty">참여 가능한 인원이 4명 미만이라 이 라운드에는 대진을 만들 수 없어요.</p>':'';
       return '<section class="round" data-round-panel="'+(ri+1)+'"'+(multi&&(ri+1)!==vr?' hidden':'')+'><div class="round-head"><span class="round-badge">'+esc(r.round)+'R</span><h3>'+esc(r.round)+' 라운드</h3><span class="round-tag">'+methodLabel+(scored?'':' · 점수 미반영')+'</span></div>'+empty+'<div class="matches">'+r.g.map((m,mi)=>{
-        const key=ri+'-'+mi,result=results[key],voidM=isVoid(m);
+        const key=ri+'-'+mi,result=results[key],voidM=isVoid(m),state=scheduleTools.matchState(d,ri,mi);
         const showWin=scored&&!voidM&&(showResults||result),locked=Boolean(d.settledAt)&&!editing;
         const twrap=(a,b,side)=>'<div class="team-wrap wrap-'+side+((!voidM&&result===side)?' win':'')+'">'+team(m,mi,ri,a,b)+'</div>';
         const mid=(scored&&!voidM)?'<div class="vs-cluster">'+(showWin?winBtn(key,'a',result,locked):'')+'<b class="vs">VS</b>'+(showWin?winBtn(key,'b',result,locked):'')+'</div>':'<b class="vs">VS</b>';
@@ -129,12 +142,12 @@ export function client(EDITOR,ADMIN,createScheduleTools){
         if(voidM)note='<div class="match-result"><span class="random-note void-note">불참자가 있어 무효 경기예요. 점수에 반영되지 않아요.</span></div>';
         else if(!scored)note='<div class="match-result"><span class="random-note">랜덤 경기예요. 승패는 점수에 반영되지 않아요.</span></div>';
         else if(showWin&&!result&&!locked)note='<div class="match-hint">이긴 팀의 <b>승</b>을 눌러주세요</div>';
-        return '<div class="match '+(editing?'edit-match':'')+((!voidM&&result)?' has-result result-'+result:'')+((scored&&!voidM)?'':' random-match')+(voidM?' void-match':'')+'"><div class="court">'+(mi+1)+'번 대진'+(editing?'<button type="button" class="del-court" data-del-court="'+ri+'-'+mi+'" aria-label="'+(mi+1)+'번 대진 삭제" title="이 대진 삭제">✕</button>':'')+'</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
+        return '<div class="match '+(editing?'edit-match':'state-'+state)+((!voidM&&result)?' has-result result-'+result:'')+((scored&&!voidM)?'':' random-match')+(voidM?' void-match':'')+'">'+(editing?'':matchStateControl(d,r,ri,mi,key,state))+'<div class="court">'+(mi+1)+'번 대진'+(editing?'<button type="button" class="del-court" data-del-court="'+ri+'-'+mi+'" aria-label="'+(mi+1)+'번 대진 삭제" title="이 대진 삭제">✕</button>':'')+'</div><div class="teams">'+twrap(0,1,'a')+mid+twrap(2,3,'b')+'</div>'+note+'</div>';
       }).join('')+'</div>'+(editing?'<button type="button" class="add-court" data-add-court="'+ri+'">＋ 코트 추가</button>':'')+'<div class="rest" id="rest-'+ri+'">휴식: '+esc((r.rest||[]).join(', ')||'없음')+'</div>'+(waiting.length?'<div class="late-wait">늦참 대기: '+esc(waiting.join(', '))+'</div>':'')+'</section>';
     }).join('');
   }
   async function detail(id,token){
-    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken)return;
+    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(token!==routeToken||draft)return;
     const dVoid=m=>Array.isArray(d.absent)&&d.absent.length>0&&m.some(n=>d.absent.includes(n));
     const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
     const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt);
@@ -142,17 +155,19 @@ export function client(EDITOR,ADMIN,createScheduleTools){
     const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?(allScoredDone?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>':'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. 라운드 버튼에 점이 있는 <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력하면 <b>대진 마감</b> 버튼이 나타나요.</div>'):'';
     app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.preTitle||d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt)+endBtn)+'</article>';
-    if(d.kind==='schedule'&&!d.settledAt)app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn));
+    if(d.kind==='schedule'&&!d.settledAt){
+      app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn,token));
+      bindProgressControls(d,token);
+    }
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
     if($('unsettlePost'))$('unsettlePost').onclick=async()=>{if(!(await confirmDialog('이 대진의 마감을 취소할까요? 반영됐던 출석·승패 점수가 되돌려지고, 다시 기록·수정할 수 있게 됩니다.')))return;try{await api('/api/posts/'+encodeURIComponent(d.id)+'/unsettle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:'{}'});message('마감을 취소했어요. 다시 기록할 수 있습니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}catch(e){message(e.message,true);}};
     const rtabs=app.querySelector('.round-tabs');if(rtabs)rtabs.onclick=e=>{const b=e.target.closest('.round-tab');if(!b)return;viewRound=+b.dataset.roundTab;app.querySelectorAll('.round-tab').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on));});app.querySelectorAll('[data-round-panel]').forEach(p=>{p.hidden=(+p.dataset.roundPanel)!==viewRound;});};
-    stopPoll();
-    if(d.kind==='schedule'&&!d.settledAt){const myToken=token;pollTimer=setInterval(async()=>{if(myToken!==routeToken){stopPoll();return;}if(recordingResult||saving||dialog.open)return;try{const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;if(myToken===routeToken&&(fresh.version!==d.version||Boolean(fresh.settledAt)!==Boolean(d.settledAt))){stopPoll();detail(d.id,routeToken);}}catch(e){}},5000);}
+    startDetailPoll(d,token);
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
-  function startDraft(d){draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
+  function startDraft(d){++routeToken;stopPoll();draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
   function editSchedule(d){
     stopPoll();startDraft(d);draft.results=draft.results||{};draft.absent=Array.isArray(draft.absent)?draft.absent:[];
     app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수 자리는 드롭다운으로 바꿀 수 있어요. 승패 기록과 대진 마감(점수 확정)는 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
@@ -177,7 +192,7 @@ export function client(EDITOR,ADMIN,createScheduleTools){
     $('savePost').onclick=save;
     $('cancelEdit').onclick=cancelEdit;
   }
-  function editNotice(d){stopPoll();startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
+  function editNotice(d){stopPoll();startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다. 🔴 로 시작하면 큰 빨간 제목이 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
   function cancelEdit(){if(dirty&&!confirm('저장하지 않은 변경 내용을 취소할까요?'))return;const target=draft.version?'#post/'+draft.id:'#'+draft.kind;dirty=false;draft=null;if(location.hash===target)route();else location.hash=target;}
   async function persistDraft(){
     const {data}=await api('/api/posts/'+draft.id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({kind:draft.kind,version:draft.version,operation:draft.operation,data:draft})});draft=data;dirty=false;return data;
@@ -188,18 +203,84 @@ export function client(EDITOR,ADMIN,createScheduleTools){
     try{await persistDraft();draft=null;message('저장되었습니다. 게시판에서 언제든 다시 볼 수 있어요.');if(location.hash==='#home'||!location.hash)route();else location.hash='#home';}
     catch(e){message(e.message,true);}finally{saving=false;app.querySelectorAll('button,input,select,textarea').forEach(el=>el.disabled=false);}
   }
-  async function recordResult(d,btn){
+  function applyMatchState(d,matchEl,ri,mi,state){
+    if(!matchEl)return;
+    matchEl.classList.remove('state-waiting','state-playing','state-finished','state-void');matchEl.classList.add('state-'+state);
+    const key=ri+'-'+mi,r=d.schedule[ri],current=matchEl.querySelector('.match-state');
+    if(current)current.outerHTML=matchStateControl(d,r,ri,mi,key,state);
+  }
+  function bindProgressControls(d,token,root=app){root.querySelectorAll('[data-progress-next]').forEach(btn=>btn.onclick=()=>recordProgress(d,btn,token));}
+  function currentDetail(id,token){return token===routeToken&&!draft&&location.hash==='#post/'+encodeURIComponent(id);}
+  function startDetailPoll(d,token,forceRefresh=false){
+    if(!currentDetail(d.id,token))return;
+    stopPoll();
+    if(d.kind!=='schedule'||d.settledAt)return;
+    let pending=false;
+    const timer=setInterval(async()=>{
+      if(!currentDetail(d.id,token)){clearInterval(timer);if(pollTimer===timer)pollTimer=null;return;}
+      if(pending||recordingResult||saving||dialog.open)return;
+      pending=true;
+      try{
+        if(forceRefresh){await detail(d.id,token);return;}
+        const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;
+        if(currentDetail(d.id,token)&&!recordingResult&&!saving&&(fresh.version!==d.version||Boolean(fresh.settledAt)!==Boolean(d.settledAt)))await detail(d.id,token);
+      }catch(e){/* Keep polling after a transient read failure. */}
+      finally{pending=false;}
+    },5000);
+    pollTimer=timer;
+  }
+  async function refreshDetail(d,token){
+    if(!currentDetail(d.id,token))return;
+    stopPoll();
+    try{await detail(d.id,token);}
+    catch(e){if(currentDetail(d.id,token)){message('최신 화면을 불러오지 못했어요. 잠시 후 자동으로 다시 확인합니다.',true);startDetailPoll(d,token,true);}}
+  }
+  async function recordProgress(d,btn,token){
+    if(saving||recordingResult||!currentDetail(d.id,token))return;
+    const key=btn.dataset.progressKey,ri=+btn.dataset.progressRound,mi=+btn.dataset.progressMatch,next=btn.dataset.progressNext,matchEl=btn.closest('.match');
+    const oldProgress=d.matchProgress?.[key],previous=scheduleTools.matchState(d,ri,mi);
+    saving=true;
+    d.matchProgress={...(d.matchProgress||{})};if(next==='waiting')delete d.matchProgress[key];else d.matchProgress[key]=next;
+    applyMatchState(d,matchEl,ri,mi,next);
+    try{
+      let resp;
+      try{resp=await api('/api/posts/'+encodeURIComponent(d.id)+'/progress',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,state:next,version:d.version})});}
+      catch(e){
+        if(oldProgress===undefined)delete d.matchProgress[key];else d.matchProgress[key]=oldProgress;
+        if(currentDetail(d.id,token)){applyMatchState(d,matchEl,ri,mi,previous);bindProgressControls(d,token,matchEl);message(e.message||'대진 진행 상태를 저장하지 못했어요.',true);if(/다른 기기/.test(e.message||''))await refreshDetail(d,token);}
+        return;
+      }
+      if(resp?.data&&typeof resp.data.version==='number')d.version=resp.data.version;
+      if(currentDetail(d.id,token))bindProgressControls(d,token,matchEl);
+      await refreshDetail(d,token);
+    }finally{saving=false;}
+  }
+  async function recordResult(d,btn,token){
+    if(saving||recordingResult||!currentDetail(d.id,token))return;
     const key=btn.dataset.resultKey,winner=btn.dataset.winner,matchEl=btn.closest('.match');
     const prev=d.results?.[key];if(prev===winner)return;
+    const [ri,mi]=key.split('-').map(Number),oldProgress=d.matchProgress?.[key];
     recordingResult=true;
     applyWin(matchEl,winner);
     d.results={...(d.results||{}),[key]:winner};
-    try{const resp=await saveResult(d.id,key,winner);if(resp&&resp.data&&typeof resp.data.version==='number')d.version=resp.data.version;if(EDITOR){routeToken++;detail(d.id,routeToken);}}
-    catch(e){if(prev){d.results[key]=prev;applyWin(matchEl,prev);}else{delete d.results[key];applyWin(matchEl,null);}message(e.message||'승패를 저장하지 못했어요.',true);}
+    applyMatchState(d,matchEl,ri,mi,'finished');
+    try{
+      let resp;
+      try{resp=await saveResult(d.id,key,winner);}
+      catch(e){
+        if(prev)d.results[key]=prev;else delete d.results[key];
+        if(oldProgress===undefined)delete d.matchProgress?.[key];else{d.matchProgress=d.matchProgress||{};d.matchProgress[key]=oldProgress;}
+        if(currentDetail(d.id,token)){applyWin(matchEl,prev||null);applyMatchState(d,matchEl,ri,mi,scheduleTools.matchState(d,ri,mi));bindProgressControls(d,token,matchEl);message(e.message||'승패를 저장하지 못했어요.',true);if(/다른 기기/.test(e.message||''))await refreshDetail(d,token);}
+        return;
+      }
+      if(resp?.data&&typeof resp.data.version==='number')d.version=resp.data.version;
+      delete d.matchProgress?.[key];
+      await refreshDetail(d,token);
+    }
     finally{recordingResult=false;}
   }
   function applyWin(matchEl,w){if(!matchEl)return;matchEl.classList.remove('result-a','result-b');if(w)matchEl.classList.add('has-result','result-'+w);else matchEl.classList.remove('has-result');const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',w==='a');if(wraps[1])wraps[1].classList.toggle('win',w==='b');matchEl.querySelectorAll('.win-pick').forEach(b=>{const on=b.dataset.winner===w;b.classList.toggle('picked',on);b.setAttribute('aria-pressed',String(on));});if(w){const h=matchEl.querySelector('.match-hint');if(h)h.remove();}}
-  async function saveResult(id,key,winner){let last;for(let i=0;i<3;i++){try{return await api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}catch(e){last=e;if(i<2&&/다른 기기/.test(e.message||'')){await new Promise(r=>setTimeout(r,250));continue;}throw e;}}throw last;}
+  async function saveResult(id,key,winner){return api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}
   async function endMatch(d){
     if(!(await confirmDialog('정말 이 대진을 마감할까요? 점수가 반영되고, 시드현황의 순위·점수 변동과 출석·승패 표시가 이 대진의 결과로 바뀝니다. (마감 후에도 되돌릴 수 있어요.)')))return;
     if(saving)return;saving=true;message('점수를 반영하는 중…');
@@ -332,7 +413,7 @@ export function client(EDITOR,ADMIN,createScheduleTools){
   }
   async function route(){
     const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;stopPoll();app.innerHTML='<p class="empty">불러오는 중…</p>';
-    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash.startsWith('#post/'))await detail(hash.slice(6),token);else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
+    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/'))await detail(hash.slice(6),token);else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
   window.addEventListener('hashchange',()=>{if(saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);});
   document.addEventListener('click',e=>{const a=e.target.closest('a');if(a&&draft&&a.getAttribute('href')===(location.hash||'#home')){e.preventDefault();if(saving)return;if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?'))return;dirty=false;route();}});

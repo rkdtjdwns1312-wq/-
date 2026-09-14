@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync,readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
@@ -8,8 +8,12 @@ import { adminKeyFor } from './dist/server/admin-login.js';
 import { runRankingProtectionChecks } from './check-ranking-protection.mjs';
 import { runScheduleChecks } from './check-schedule.mjs';
 import { runWeeklyResultsChecks } from './check-weekly-results.mjs';
+import { runMatchProgressChecks } from './check-match-progress.mjs';
+import { runLiveCourtsChecks } from './check-live-courts.mjs';
+import { runProgressUIChecks } from './check-progress-ui.mjs';
+import { runLiveUIChecks } from './check-live-ui.mjs';
 const db=new DatabaseSync(':memory:');
-for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12','0008_points_movement_and_legacy_cleanup','0009_guest_scoring','0010_admin_operators_backups','0011_rank_movement_and_score_floor','0012_db_people_catalog_and_edit_history'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
+for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password',ADMIN_PASSWORD:'admin-pass'};
 const origin='http://localhost:4173';
@@ -18,6 +22,9 @@ new Function('return ('+client.toString()+')');
 assert.ok(client.toString().includes('id="addGuest"')&&client.toString().includes('adhoc'),'openPicker에 즉석 게스트 추가 기능이 있어야 합니다');
 assert.ok(client.toString().includes('id="deletePost"'),'상세 화면에 삭제 버튼이 있어야 합니다');
 assert.ok(client.toString().includes('personEditForm')&&client.toString().includes('/api/people/update')&&client.toString().includes('/api/people/history'),'운영진 사람 정보 수정·변경 이력 UI가 있어야 합니다');
+const noticeStart=client.toString().indexOf('function noticeHTML'),noticeEnd=client.toString().indexOf('let people',noticeStart),renderNotice=new Function('esc',client.toString().slice(noticeStart,noticeEnd)+';return noticeHTML;')(s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'));
+const noticeRendered=renderNotice('1. 첫 제목\n[소제목]\n🔴 쿠폰 누락자 및 미지급자\n2. 둘째 제목\n🔵 강조 메모\n<script>alert(1)</script>');
+assert.equal(noticeRendered,'<h2 class="nb-section"><span class="nb-num">1</span><span>첫 제목</span></h2><h3 class="nb-sub">소제목</h3><h2 class="nb-section nb-section-alert"><span>쿠폰 누락자 및 미지급자</span></h2><h2 class="nb-section"><span class="nb-num">2</span><span>둘째 제목</span></h2><p class="nb-note">🔵 강조 메모</p><p>&lt;script&gt;alert(1)&lt;/script&gt;</p>','공지 heading renderer는 🔴 경고 제목·기존 heading·메모·escaping을 보존해야 합니다');
 assert.equal((await login('wrong')).status,401);
 const accepted=await login('test-password');assert.equal(accepted.status,200);assert.equal((await accepted.json()).redirect,'/operate-test-editor-key');
 assert.equal((await login('test-password',{origin:'https://untrusted.example'})).status,403);
@@ -219,13 +226,24 @@ assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:
 await runRankingProtectionChecks();
 await runScheduleChecks({worker,env,origin});
 await runWeeklyResultsChecks();
+await runMatchProgressChecks();
+await runProgressUIChecks();
+await runLiveCourtsChecks({worker,env,origin,db});
+await runLiveUIChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
+  const previewPort=Number(process.env.KOKKIRI_PREVIEW_PORT||4173);
+  assert.ok(Number.isInteger(previewPort)&&previewPort>=1024&&previewPort<=65535,'유효한 로컬 미리보기 포트가 필요합니다');
   createServer(async(req,res)=>{
+    if(req.url.startsWith('/__mobile')){
+      const view=new URL(req.url,origin).searchParams.get('view'),hash=view==='home'?'home':view==='schedule'?'post/schedule-ui-test':'live';
+      res.writeHead(200,{'content-type':'text/html; charset=utf-8'});
+      res.end('<!doctype html><html><head><title>390px local preview</title></head><body style="margin:0;background:#ddd"><iframe title="390px mobile preview" src="/#'+hash+'" style="width:390px;height:844px;border:0;display:block"></iframe></body></html>');return;
+    }
     try{const chunks=[];for await(const chunk of req)chunks.push(chunk);
       const r=await worker.fetch(new Request(origin+req.url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);
       res.writeHead(r.status,Object.fromEntries(r.headers));res.end(Buffer.from(await r.arrayBuffer()));
     }catch{res.writeHead(500);res.end('Preview unavailable');}
-  }).listen(4173,'127.0.0.1',()=>console.log('Local URL: http://localhost:4173'));
+  }).listen(previewPort,'127.0.0.1',()=>console.log('Local URL: http://localhost:'+previewPort));
 }
