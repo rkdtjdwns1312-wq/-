@@ -1,19 +1,10 @@
-import people from './roster.js';
 import images from './images.js';
 import { client } from './boards-client.js';
 import { css } from './boards-style.js';
 import { createScheduleTools } from './schedule-tools.js';
 import { operatorLogin } from './operator-login.js';
 import { adminLogin, adminKeyFor } from './admin-login.js';
-import { ensureRankingMembers, orderRankingRows, rankingOnlyPeople, seedForPoints } from './rankings.js';
-
-const appPeople=[...people,...rankingOnlyPeople(people)];
-const appGuests=appPeople.filter(p=>p.type==='guest');
-// 정적 게스트(roster.js)를 guests 테이블에 1회 시드한다(요청 060). 이미 있으면 건너뜀.
-async function ensureGuests(db){
-  if(!appGuests.length)return;
-  await db.batch(appGuests.map(g=>db.prepare('INSERT OR IGNORE INTO guests (guest_id,name,points,previous_points,attendance,wins,losses,hidden,created_at) VALUES (?,?,?,?,0,0,0,0,?)').bind(g.id,g.name,Math.max(20,Number.isFinite(g.points)?g.points:20),Math.max(20,Number.isFinite(g.points)?g.points:20),'2026-09-10T00:00:00.000Z')));
-}
+import { orderRankingRows, seedForPoints } from './rankings.js';
 
 // 명단 변경은 현재 순위만 다시 매긴다. 정모 증감·보호 표시와 이전 순위는 보존한다.
 async function reorderMembers(db){
@@ -183,7 +174,6 @@ async function unsettleSchedule(db,id){
 }
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
-  await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
   const posts=(await env.DB.prepare('SELECT id,kind,payload,version,last_operation,created_at,updated_at FROM board_posts ORDER BY created_at').all()).results;
   const members=(await env.DB.prepare('SELECT * FROM ranking_members').all()).results;
   const guests=(await env.DB.prepare('SELECT * FROM guests').all()).results;
@@ -207,19 +197,16 @@ export default {async fetch(request,env){
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path==='/api/people'&&request.method==='GET'){
-    if(!env.DB)return json({people:appPeople});
-    await ensureRankingMembers(env.DB,appPeople);
-    await ensureGuests(env.DB);
-    const members=(await env.DB.prepare('SELECT member_id,name,seed,points,is_operator FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:r.seed,points:r.points,is_operator:r.is_operator}));
-    const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses,rank_protected,floor_protected_at FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses,rank_protected:r.rank_protected,floor_protected_at:r.floor_protected_at}));
+    if(!env.DB)return json({error:'Storage unavailable'},503);
+    const members=(await env.DB.prepare('SELECT member_id,name,seed,points,is_operator,edit_version FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:seedForPoints(r.points),points:r.points,is_operator:r.is_operator,edit_version:r.edit_version}));
+    const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses,rank_protected,floor_protected_at,edit_version FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses,rank_protected:r.rank_protected,floor_protected_at:r.floor_protected_at,edit_version:r.edit_version}));
     return json({people:[...members,...guests]});
   }
   if(path.startsWith('/api/')){
     try{
       if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
-        await ensureRankingMembers(env.DB,appPeople);
-        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
+        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at,edit_version FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
         const sourceDate='2026-09-10';
         const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
         const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
@@ -233,19 +220,68 @@ export default {async fetch(request,env){
         if(!name||name.length>100)return json({error:'닉네임을 확인해주세요.'},400);
         if(type!=='member'&&type!=='guest')return json({error:'회원 또는 게스트를 선택해주세요.'},400);
         if(!Number.isInteger(points)||points<20||points>1000)return json({error:'시드 점수는 20~1000 사이 숫자로 입력해주세요.'},400);
-        await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
+        const memberNameDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
+        const guestNameDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=?').bind(name).first();
+        if(memberNameDup||guestNameDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
         const at=new Date().toISOString();
         if(type==='member'){
-          const dup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
-          if(dup)return json({error:'같은 이름의 회원이 이미 있어요. 다른 이름을 써주세요.'},409);
           const id='custom-m-'+crypto.randomUUID();
-          await env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,points,at).run();
+          await env.DB.batch([
+            env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,points,at),
+            env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'member',id,'create',null,name,null,points,'운영진이 새 회원을 추가함',at)
+          ]);
           await reorderMembers(env.DB);
           return json({data:{id,name,type,points,seed:seedForPoints(points)}});
         }
         const gid='custom-g-'+crypto.randomUUID();
-        await env.DB.prepare('INSERT INTO guests (guest_id,name,points,previous_points,attendance,wins,losses,hidden,created_at) VALUES (?,?,?,?,0,0,0,0,?)').bind(gid,name,points,points,at).run();
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO guests (guest_id,name,points,previous_points,attendance,wins,losses,hidden,created_at) VALUES (?,?,?,?,0,0,0,0,?)').bind(gid,name,points,points,at),
+          env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'guest',gid,'create',null,name,null,points,'운영진이 새 게스트를 추가함',at)
+        ]);
         return json({data:{id:gid,name,type,points,seed:seedForPoints(points)}});
+      }
+      if(path==='/api/people/update'&&request.method==='POST'){
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 정보를 수정할 수 있습니다.'},403);
+        const raw=await request.text();if(raw.length>4000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        const id=String(input.id||''),type=input.type,name=String(input.name||'').trim(),reason=String(input.reason||'').trim();
+        const points=Number(input.points),expectedVersion=Number(input.expectedVersion);
+        if(!/^[A-Za-z0-9-]{1,120}$/.test(id)||!['member','guest'].includes(type))return json({error:'수정 대상을 확인해주세요.'},400);
+        if(!name||name.length>100)return json({error:'닉네임을 확인해주세요.'},400);
+        if(!Number.isInteger(points)||points<20||points>1000)return json({error:'시드 점수는 20~1000 사이 숫자로 입력해주세요.'},400);
+        if(!Number.isInteger(expectedVersion)||expectedVersion<1)return json({error:'최신 정보를 다시 불러와주세요.'},400);
+        if(!reason||reason.length>300)return json({error:'수정 사유를 1~300자로 입력해주세요.'},400);
+        const current=type==='member'
+          ?await env.DB.prepare('SELECT member_id AS person_id,name,points,edit_version FROM ranking_members WHERE member_id=? AND hidden=0').bind(id).first()
+          :await env.DB.prepare('SELECT guest_id AS person_id,name,points,edit_version FROM guests WHERE guest_id=? AND hidden=0').bind(id).first();
+        if(!current)return json({error:'수정할 사람을 찾지 못했습니다. 목록을 새로고침해주세요.'},404);
+        if(current.edit_version!==expectedVersion)return json({error:'다른 운영진이 먼저 수정했습니다. 목록을 새로고침한 뒤 다시 시도해주세요.',conflict:true},409);
+        const memberDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0 AND member_id<>?').bind(name,type==='member'?id:'').first();
+        const guestDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND hidden=0 AND guest_id<>?').bind(name,type==='guest'?id:'').first();
+        if(memberDup||guestDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
+        const at=new Date().toISOString(),pointsChanged=points!==current.points;
+        const updateSql=type==='member'
+          ?'UPDATE ranking_members SET name=?,points=?,seed=?,previous_points=CASE WHEN ? THEN ? ELSE previous_points END,rank_movement=CASE WHEN ? THEN 0 ELSE rank_movement END,rank_protected=CASE WHEN ? THEN 0 ELSE rank_protected END,floor_protected_at=CASE WHEN ? THEN NULL ELSE floor_protected_at END,edit_version=edit_version+1,updated_at=? WHERE member_id=? AND hidden=0 AND edit_version=?'
+          :'UPDATE guests SET name=?,points=?,previous_points=CASE WHEN ? THEN ? ELSE previous_points END,rank_protected=CASE WHEN ? THEN 0 ELSE rank_protected END,floor_protected_at=CASE WHEN ? THEN NULL ELSE floor_protected_at END,edit_version=edit_version+1 WHERE guest_id=? AND hidden=0 AND edit_version=?';
+        const updateStatement=type==='member'
+          ?env.DB.prepare(updateSql).bind(name,points,seedForPoints(points),pointsChanged?1:0,points,pointsChanged?1:0,pointsChanged?1:0,pointsChanged?1:0,at,id,expectedVersion)
+          :env.DB.prepare(updateSql).bind(name,points,pointsChanged?1:0,points,pointsChanged?1:0,pointsChanged?1:0,id,expectedVersion);
+        const updateResult=await updateStatement.run();
+        if(!updateResult?.meta?.changes)return json({error:'다른 운영진이 먼저 수정했습니다. 목록을 새로고침한 뒤 다시 시도해주세요.',conflict:true},409);
+        await env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),type,id,'update',current.name,name,current.points,points,reason,at).run();
+        if(type==='member')await reorderMembers(env.DB);
+        return json({data:{id,type,name,points,seed:seedForPoints(points),edit_version:expectedVersion+1}});
+      }
+      if(path==='/api/people/history'&&request.method==='GET'){
+        if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 변경 이력을 볼 수 있습니다.'},403);
+        const type=url.searchParams.get('type'),id=url.searchParams.get('id')||'';
+        if(!['member','guest'].includes(type)||!/^[A-Za-z0-9-]{1,120}$/.test(id))return json({error:'조회 대상을 확인해주세요.'},400);
+        let guestId='';
+        if(type==='member')guestId=(await env.DB.prepare('SELECT promoted_guest_id FROM ranking_members WHERE member_id=?').bind(id).first())?.promoted_guest_id||'';
+        const rows=type==='member'&&guestId
+          ?(await env.DB.prepare("SELECT id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at FROM people_changes WHERE (person_type='member' AND person_id=?) OR (person_type='guest' AND person_id=?) ORDER BY created_at DESC LIMIT 50").bind(id,guestId).all()).results
+          :(await env.DB.prepare('SELECT id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at FROM people_changes WHERE person_type=? AND person_id=? ORDER BY created_at DESC LIMIT 50').bind(type,id).all()).results;
+        return json({items:rows});
       }
       if(path==='/api/people/hide'&&request.method==='POST'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
@@ -253,7 +289,6 @@ export default {async fetch(request,env){
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
         const ids=Array.isArray(input.ids)?input.ids.filter(x=>typeof x==='string'&&x.length<=100).slice(0,300):[];
         if(!ids.length)return json({error:'삭제할 사람을 선택해주세요.'},400);
-        await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
         const at=new Date().toISOString(),stmts=[];
         for(const id of ids){stmts.push(env.DB.prepare('UPDATE ranking_members SET hidden=1,updated_at=? WHERE member_id=?').bind(at,id));stmts.push(env.DB.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').bind(id));}
         await env.DB.batch(stmts);
@@ -267,7 +302,6 @@ export default {async fetch(request,env){
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
         const ids=Array.isArray(input.ids)?input.ids.filter(x=>typeof x==='string'&&x.length<=100).slice(0,300):[];
         if(!ids.length)return json({error:'이관할 게스트를 선택해주세요.'},400);
-        await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);
         const chosen=(await env.DB.prepare('SELECT * FROM guests WHERE hidden=0').all()).results.filter(g=>ids.includes(g.guest_id));
         if(!chosen.length)return json({error:'이관할 게스트를 찾지 못했습니다.'},404);
         for(const g of chosen){const dup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0').bind(g.name).first();if(dup)return json({error:`이미 회원에 같은 이름(${g.name})이 있어요. 이름을 바꾼 뒤 이관해주세요.`},409);}
@@ -276,6 +310,7 @@ export default {async fetch(request,env){
           const mid='custom-m-'+crypto.randomUUID();
           stmts.push(env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden,rank_protected,floor_protected_at,promoted_guest_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)').bind(mid,g.name,g.points,seedForPoints(g.points),999999,999999,g.previous_points,g.attendance,g.wins,g.losses,at,g.rank_protected,g.floor_protected_at,g.guest_id));
           stmts.push(env.DB.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').bind(g.guest_id));
+          stmts.push(env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'guest',g.guest_id,'promote',g.name,g.name,g.points,g.points,'운영진이 게스트를 회원으로 이관함',at));
         }
         await env.DB.batch(stmts);
         await reorderMembers(env.DB);
@@ -288,7 +323,6 @@ export default {async fetch(request,env){
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
         const memberId=String(input.memberId||''),on=input.on?1:0;
         if(!memberId)return json({error:'대상을 확인해주세요.'},400);
-        await ensureRankingMembers(env.DB,appPeople);
         const r=await env.DB.prepare('UPDATE ranking_members SET is_operator=? WHERE member_id=? AND hidden=0').bind(on,memberId).run();
         if(!r.meta.changes)return json({error:'대상 회원을 찾지 못했습니다.'},404);
         return json({data:{memberId,is_operator:on}});
@@ -324,14 +358,12 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 점수를 반영할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>4000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);if(!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('점수 반영 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
-        await ensureRankingMembers(env.DB,appPeople);
         return settleSchedule(env.DB,settleMatch[1],input);
       }
       const unsettleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/unsettle$/);
       if(unsettleMatch){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 마감을 취소할 수 있습니다.'},403);
-        await ensureRankingMembers(env.DB,appPeople);
         return unsettleSchedule(env.DB,unsettleMatch[1]);
       }
       const resultMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/result$/);
@@ -405,7 +437,7 @@ export default {async fetch(request,env){
         ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(id,input.kind,JSON.stringify(payload),input.operation,at,at).run()
         :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?').bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version).run();
       // 요청 047: 새 대진(정모)을 만들 때 출석·승·패를 0으로 초기화한다. 점수·시드·순위는 누적 유지.
-      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await ensureRankingMembers(env.DB,appPeople);await ensureGuests(env.DB);await env.DB.batch([env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,previous_rank=rank,previous_points=points,rank_movement=0,rank_protected=0,updated_at=?').bind(at),env.DB.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0')]);}
+      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await env.DB.batch([env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,previous_rank=rank,previous_points=points,rank_movement=0,rank_protected=0,updated_at=?').bind(at),env.DB.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0')]);}
       const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
       if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);

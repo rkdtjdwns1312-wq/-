@@ -18,7 +18,7 @@ function migrate(sqlite,names=migrations){for(const name of names)sqlite.exec(re
 function verifyUpgrade(){
   const {sqlite}=database();
   try{
-    migrate(sqlite,migrations.filter(n=>!n.startsWith('0011_')));
+    migrate(sqlite,migrations.filter(n=>!n.startsWith('0011_')&&!n.startsWith('0012_')));
     const at='2026-09-13T01:00:00.000Z';
     sqlite.prepare('INSERT INTO ranking_settlements VALUES (?,?,?)').run('upgrade-settlement',at,'upgrade');
     const insert=sqlite.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
