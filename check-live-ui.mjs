@@ -4,7 +4,7 @@ import { createLiveView } from './dist/server/live-client.js';
 const clone=value=>structuredClone(value);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const court=names=>({names,state:names.every(Boolean)?'playing':'waiting'});
-const fixture=()=>({version:1,courts:[court(['A','B','C',''])],queue:[],updatedAt:null});
+const fixture=()=>({version:1,isOpen:true,courts:[court(['A','B','C',''])],queue:[],updatedAt:null});
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 
 // Minimal DOM boundaries for the real factory. No live requests or real timers.
@@ -36,7 +36,7 @@ function element(tag='div',attrs={},onPaint=()=>{}){
   }});
   return node;
 }
-function harness(initial=fixture()){
+function harness(initial=fixture(),editor=''){
   let server=clone(initial),paints=0,nextTimer=0,routeToken=1;
   const timers=new Map(),calls=[],messages=[],dialogs=[],app=element('main',{},()=>paints++);
   let apiImpl=async()=>({data:clone(server)});
@@ -46,10 +46,10 @@ function harness(initial=fixture()){
   };
   const document={createElement:tag=>element(tag),body:{append(dialog){dialogs.push(dialog);}}};
   const instantiate=new Function('options','document','setInterval','clearInterval','confirm','prompt','return ('+createLiveView.toString()+')(options);');
-  const view=instantiate({app,api,esc,EDITOR:'',message:(text,error)=>messages.push({text,error}),isCurrent:token=>token===routeToken},document,
+  const view=instantiate({app,api,esc,EDITOR:editor,message:(text,error)=>messages.push({text,error}),isCurrent:token=>token===routeToken},document,
     callback=>{const id=++nextTimer;timers.set(id,callback);return id;},id=>timers.delete(id),()=>true,()=>null);
   return {
-    app,view,timers,calls,messages,
+    app,view,timers,calls,messages,dialogs,
     get paints(){return paints;},get server(){return clone(server);},set server(value){server=clone(value);},
     setAPI(fn){apiImpl=fn;},getAPI(){return apiImpl;},
     async open(){await view.open(routeToken);},
@@ -63,9 +63,9 @@ function harness(initial=fixture()){
 
 export async function runLiveUIChecks(){
   {
-    const h=harness({version:0,courts:[],queue:[],updatedAt:null});await h.open();
-    assert.ok(h.app.innerHTML.includes('아직 만든 코트가 없습니다.'));
-    assert.equal(h.app.querySelector('#liveJoin').disabled,true,'initial version zero still paints the empty view');
+    const h=harness({version:0,isOpen:false,courts:[],queue:[],updatedAt:null});await h.open();
+    assert.ok(h.app.innerHTML.includes('운영진이 실시간대진을 열면 입장할 수 있어요.'));
+    assert.equal(h.app.querySelector('#liveJoin'),null,'legacy or missing isOpen defaults to a closed public view');
     h.view.stop();
   }
   {
@@ -152,14 +152,14 @@ export async function runLiveUIChecks(){
     h.view.stop();
   }
   {
-    const initial={version:1,courts:[court(['A','B','C','D'])],queue:[{names:['E','F','G','H']},{names:['I','J','K','L']}]};
+    const initial={version:1,isOpen:true,courts:[court(['A','B','C','D'])],queue:[{names:['E','F','G','H']},{names:['I','J','K','L']}]};
     const h=harness(initial);await h.open();
     assert.equal(h.app.querySelectorAll('[data-live-end]').length,1);
     assert.ok(!/\bVS\b|data-winner|win-pick/.test(h.app.innerHTML),'no VS or win controls in free play');
     const post=deferred();h.setAPI(()=>post.promise);
     const button=h.app.querySelector('[data-live-end]'),ending=button.onclick();await button.onclick();
     assert.equal(h.calls.filter(call=>call.method==='POST').length,1,'double end cannot advance two groups');
-    post.resolve({data:{version:2,courts:[court(['E','F','G','H'])],queue:[{names:['I','J','K','L']}]}});await ending;
+    post.resolve({data:{version:2,isOpen:true,courts:[court(['E','F','G','H'])],queue:[{names:['I','J','K','L']}]}});await ending;
     assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:1,action:'end',court:0});
     assert.ok(h.app.innerHTML.includes('1번 코트 1번 참가자 E'));
     assert.ok(!h.app.innerHTML.includes('1번 코트 1번 참가자 A'));
@@ -179,5 +179,113 @@ export async function runLiveUIChecks(){
     post.resolve({data:{...fixture(),version:2}});await pending;
     assert.equal(h.app.innerHTML,'Other page');assert.equal(dialog.removed,true);assert.equal(h.timers.size,0);
   }
-  console.log('PASS: actual live-view factory covers partial-court selection, conflict/cancel repaint, preserved input, stale reads, unchanged DOM, duplicate writes and navigation cleanup.');
+  {
+    const closed={version:1,isOpen:false,courts:[],queue:[],updatedAt:null};
+    const member=harness(closed);await member.open();
+    assert.equal(member.app.querySelector('#liveToggle'),null,'public users never receive an operator toggle');
+    assert.equal(member.app.querySelector('#liveCreate'),null);
+    assert.ok(member.app.innerHTML.includes('운영진이 실시간대진을 열면 입장할 수 있어요.'));
+    member.view.stop();
+
+    const operator=harness(closed,'operator-key');await operator.open();
+    assert.equal(operator.calls[0].headers['x-kokkiri-editor'],'operator-key','operator reads retained closed data with the editor header');
+    const toggle=operator.app.querySelector('#liveToggle');assert.ok(toggle);
+    toggle.onclick();let dialog=operator.dialogs.at(-1);
+    assert.ok(dialog.innerHTML.includes('실시간대진을 시작하시겠습니까?'));
+    dialog.querySelector('#liveToggleNo').onclick();
+    assert.equal(operator.calls.filter(call=>call.method==='POST').length,0,'no confirmation never writes');
+    operator.app.querySelector('#liveToggle').onclick();dialog=operator.dialogs.at(-1);
+    const reopened={version:2,isOpen:true,courts:[],queue:[],updatedAt:null};
+    operator.setAPI(async(path,options)=>options?.method==='POST'?{data:reopened}:{data:closed});
+    await dialog.querySelector('#liveToggleYes').onclick();
+    const write=operator.calls.find(call=>call.method==='POST');
+    assert.deepEqual(write.body,{version:1,action:'open'});assert.equal(write.headers['x-kokkiri-editor'],'operator-key');
+    assert.ok(operator.app.querySelector('#liveJoin')?.disabled,'opening before any court keeps the join button disabled');
+    operator.view.stop();
+  }
+  {
+    const h=harness();await h.open();const read=deferred();h.setAPI(()=>read.promise);
+    const pending=h.tick(),dialog=h.join(),input=dialog.querySelector('#liveJoinName');input.value='종료 중';
+    read.resolve({data:{version:2,isOpen:false,courts:[],queue:[],updatedAt:null}});await pending;
+    assert.equal(dialog.removed,true,'a remote close dismisses an in-progress join dialog');
+    assert.ok(h.app.innerHTML.includes('운영진이 실시간대진을 열면 입장할 수 있어요.'));
+    assert.equal(h.app.querySelector('#liveJoin'),null);
+    h.view.stop();
+  }
+  {
+    const initial={version:1,isOpen:true,courts:[court(['A','B','C','D'])],queue:[],updatedAt:null};
+    const h=harness(initial);await h.open();const read=deferred(),post=deferred();
+    h.setAPI((path,options)=>options?.method==='POST'?post.promise:read.promise);
+    const polling=h.tick(),ending=h.app.querySelector('[data-live-end]').onclick();
+    post.resolve({data:{version:3,isOpen:true,courts:[court(['E','F','G','H'])],queue:[],updatedAt:null}});await ending;
+    read.resolve({data:{version:2,isOpen:false,courts:[],queue:[],updatedAt:null}});await polling;
+    assert.ok(h.app.querySelector('#liveJoin'),'an older closed GET cannot replace a newer open write response');
+    assert.ok(h.app.innerHTML.includes('1번 코트 1번 참가자 E'));
+    h.view.stop();
+  }
+  {
+    const h=harness();await h.open();const dialog=h.join(),input=dialog.querySelector('#liveJoinName'),select=dialog.querySelector('#liveJoinCourt');
+    input.value='A';const selected=select.value;
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('현재 게임중인 회원입니다. 등록할 수 없습니다.');return {data:h.server};});
+    await h.submit(dialog);
+    const notice=h.dialogs.at(-1);
+    assert.equal(dialog.removed,false,'duplicate notice keeps the join form open');
+    assert.equal(input.value,'A');assert.equal(select.value,selected);
+    assert.equal(notice.querySelectorAll('button').length,1,'duplicate notice has one acknowledgement button');
+    assert.ok(notice.innerHTML.includes('현재 게임중인 회원입니다. 등록할 수 없습니다.'));
+    notice.querySelector('#liveDuplicateOk').onclick();
+    assert.equal(notice.removed,true);assert.equal(dialog.removed,false,'closing the notice preserves the retry form');
+    h.view.stop();
+  }
+  {
+    const h=harness();await h.open();const dialog=h.join();dialog.querySelector('#liveJoinName').value='종료 충돌';
+    h.server={version:2,isOpen:false,courts:[],queue:[]};
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('실시간대진이 종료되어 입장하거나 변경할 수 없습니다.');return {data:h.server};});
+    await h.submit(dialog);await h.tick();
+    assert.equal(dialog.removed,true);assert.equal(h.app.querySelector('#liveJoin'),null,'closed conflict refresh immediately renders the closed page');
+    assert.ok(h.app.innerHTML.includes('운영진이 실시간대진을 열면'));h.view.stop();
+  }
+  {
+    const h=harness();await h.open();const dialog=h.join();dialog.querySelector('#liveJoinName').value='A';
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('현재 게임중인 회원입니다. 등록할 수 없습니다.');return {data:h.server};});
+    await h.submit(dialog);const notice=h.dialogs.at(-1);
+    h.server={version:2,isOpen:false,courts:[],queue:[]};await h.tick();
+    assert.equal(dialog.removed,true);assert.equal(notice.removed,true,'closing the session clears both stacked dialogs');h.view.stop();
+  }
+  {
+    const h=harness();await h.open();const dialog=h.join(),post=deferred();dialog.querySelector('#liveJoinName').value='A';
+    h.setAPI(()=>post.promise);const submitting=h.submit(dialog);h.leavePage();
+    post.reject(Error('현재 게임중인 회원입니다. 등록할 수 없습니다.'));await submitting;
+    assert.equal(h.dialogs.length,1,'late duplicate response cannot open a notice on another page');assert.equal(h.app.innerHTML,'Other page');
+  }
+  {
+    const h=harness();await h.open();const dialog=h.join(),select=dialog.querySelector('#liveJoinCourt');dialog.querySelector('#liveJoinName').value='새 참가';
+    h.server={...fixture(),version:2,courts:[court(['New','','',''])]};await h.tick();
+    assert.equal(select.value,'0');assert.ok(select.innerHTML.includes('3/4명'),'gate-only poll does not silently replace join destinations');
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('다른 사람이 먼저 변경했어요. 최신 코트를 확인한 뒤 다시 입력해주세요.');return {data:h.server};});
+    await h.submit(dialog);assert.equal(h.calls.find(c=>c.method==='POST').body.version,1,'join must submit the version the user actually saw');
+    assert.ok(select.innerHTML.includes('1/4명'),'explicit conflict refresh updates choices');assert.equal(dialog.querySelector('#liveJoinName').value,'새 참가');h.view.stop();
+  }
+  {
+    const initial={...fixture(),isOpen:false};const h=harness(initial,'operator-key');await h.open();
+    h.app.querySelector('#liveToggle').onclick();const dialog=h.dialogs.at(-1);
+    h.server={...initial,version:3};await h.tick();
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('다른 사람이 먼저 변경했어요. 최신 코트를 확인한 뒤 다시 입력해주세요.');return {data:h.server};});
+    await dialog.querySelector('#liveToggleYes').onclick();
+    assert.equal(h.calls.find(c=>c.method==='POST').body.version,1,'confirmation uses its opening version, not a newer poll');
+    assert.equal(dialog.removed,true);assert.equal(h.calls.filter(c=>c.method==='POST').length,1,'conflict requires a fresh confirmation');
+    h.app.querySelector('#liveToggle').onclick();h.dialogs.at(-1).dispatch('cancel');
+    assert.equal(h.calls.filter(c=>c.method==='POST').length,1,'ESC never writes');h.view.stop();
+  }
+  {
+    const h=harness();await h.open();const read=deferred(),post=deferred();
+    h.setAPI((path,options)=>options?.method==='POST'?post.promise:read.promise);
+    const polling=h.tick(),dialog=h.join();dialog.querySelector('#liveJoinName').value='저장 중';
+    const submitting=h.submit(dialog),paints=h.paints;
+    read.resolve({data:{version:3,isOpen:false,courts:[],queue:[]}});await polling;
+    assert.equal(h.paints,paints);assert.equal(dialog.removed,false,'GET cannot adopt state while saving');
+    post.resolve({data:{...fixture(),version:2,courts:[court(['A','B','C','저장 중'])]}});await submitting;
+    assert.ok(h.app.innerHTML.includes('저장 중'));h.view.stop();
+  }
+  console.log('PASS: actual live-view factory covers operator confirmation/gate races, remote closure, duplicate-name notice, preserved input, stale reads, writes and navigation cleanup.');
 }
