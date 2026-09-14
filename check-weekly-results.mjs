@@ -8,7 +8,7 @@ export async function runWeeklyResultsChecks(){
   const dir=new URL('./drizzle/',import.meta.url);
   for(const name of readdirSync(dir).filter(n=>n.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(name,dir),'utf8'));
   const DB={prepare(sql){const s=sqlite.prepare(sql);let p=[];return {
-    bind(...v){p=v;return this;},async first(){return s.get(...p)||null;},async all(){return {results:s.all(...p)};},async run(){return {meta:s.run(...p)};}
+    bind(...v){p=v;return this;},async first(){return s.get(...p)||null;},async all(){return {results:s.all(...p)};},async run(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:s.all(...p)}:{meta:s.run(...p)};}
   };},async batch(statements){sqlite.exec('BEGIN');try{const out=[];for(const s of statements)out.push(await s.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
   const env={DB,EDITOR_KEY:crypto.randomUUID()},origin='https://weekly.test';
   const call=(path,method='GET',body)=>worker.fetch(new Request(origin+path,{method,headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
@@ -45,7 +45,9 @@ export async function runWeeklyResultsChecks(){
     const partial=await call('/api/posts/weekly-draft/settle','POST',{version:2,operation:crypto.randomUUID()});
     assert.equal(partial.status,400);
     const stale=await call('/api/posts/weekly-a/settle','POST',{version:1,operation:crypto.randomUUID()});
-    assert.equal(stale.status,200,'already settled is idempotent');
+    assert.equal(stale.status,409,'a different operation from a stale screen must require refresh');
+    const applied=sqlite.prepare('SELECT operation FROM ranking_settlements WHERE schedule_id=?').get('weekly-a');
+    assert.equal((await call('/api/posts/weekly-a/settle','POST',{version:1,operation:applied.operation})).status,200,'retrying the same applied operation remains idempotent');
     await data('/api/posts/weekly-other-draft','DELETE');
     assert.deepEqual(await display(),first);assert.equal(ledger(),firstLedger);
 

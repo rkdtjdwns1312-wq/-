@@ -9,12 +9,7 @@ import { readWeeklyResults } from './weekly-results.js';
 import { liveCourts } from './live-courts.js';
 import { createLiveView } from './live-client.js';
 import { liveCss } from './live-style.js';
-
-// 명단 변경은 현재 순위만 다시 매긴다. 정모 증감·보호 표시와 이전 순위는 보존한다.
-async function reorderMembers(db){
-  const rows=(await db.prepare('SELECT * FROM ranking_members WHERE hidden=0').all()).results;
-  await db.batch(orderRankingRows(rows).map(r=>db.prepare('UPDATE ranking_members SET rank=?,previous_rank=CASE WHEN previous_rank=999999 THEN ? ELSE previous_rank END WHERE member_id=?').bind(r.rank,r.rank,r.member_id)));
-}
+import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-write.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -52,6 +47,7 @@ function validate(d,kind){
     return {title:title||defaultTitle(),body:d.body.trim()};
   }
   if(!Array.isArray(d.names)||d.names.length<4||d.names.length>200||d.names.some(n=>typeof n!=='string'||!n.trim()||n.length>100)||new Set(d.names).size!==d.names.length)throw Error('참가자 명단을 확인해주세요.');
+  if(d.participantIds!=null&&(!Array.isArray(d.participantIds)||(d.participantIds.length>0&&(d.participantIds.length!==d.names.length||d.participantIds.some(id=>typeof id!=='string'||!id||id.length>120)||new Set(d.participantIds).size!==d.participantIds.length))))throw Error('참가자와 회원 ID 연결을 확인해주세요.');
   if(!Number.isInteger(d.courts)||d.courts<1||d.courts>20||!Number.isInteger(d.rounds)||d.rounds<1||d.rounds>20||!Array.isArray(d.schedule)||d.schedule.length!==d.rounds)throw Error('코트와 라운드 수를 확인해주세요.');
   if(d.lateRounds!=null&&(typeof d.lateRounds!=='object'||Array.isArray(d.lateRounds)))throw Error('늦참 라운드를 확인해주세요.');
   const lateEntries=Object.entries(d.lateRounds||{}).filter(([name])=>d.names.includes(name));
@@ -60,7 +56,7 @@ function validate(d,kind){
   const lateRegistration=Array.isArray(d.lateRegistration)?[...new Set(d.lateRegistration.filter(n=>typeof n==='string'&&d.names.includes(n)))]:[];
   const schedule=d.schedule.map((r,i)=>{
     const available=scheduleTools.availableNames({names:d.names,lateRounds},i);
-    if(!Array.isArray(r.g)||(r.g.length===0&&available.length>=4)||r.g.length>100||r.g.some(m=>!Array.isArray(m)||m.length!==4||new Set(m).size!==4))throw Error('대진 구성을 확인해주세요.');
+    if(!r||!Array.isArray(r.g)||(r.g.length===0&&available.length>=4)||r.g.length>100||r.g.some(m=>!Array.isArray(m)||m.length!==4||new Set(m).size!==4))throw Error('대진 구성을 확인해주세요.');
     const playing=r.g.flat();
     if(playing.some(n=>!d.names.includes(n)))throw Error('대진에 명단에 없는 참가자가 있습니다.');
     if(playing.some(n=>!available.includes(n)))throw Error((i+1)+'라운드에 아직 도착하지 않은 참가자가 있습니다.');
@@ -73,12 +69,14 @@ function validate(d,kind){
   return base;
 }
 async function settleSchedule(db,id,input){
+  const revision=await rosterRevision(db);
   const row=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   if(!row)return json({error:'게시글을 찾을 수 없습니다.'},404);
   const post=unpack(row);
   if(post.kind!=='schedule')return json({error:'대진표만 점수 반영할 수 있습니다.'},400);
-  if(post.settledAt)return json({data:post});
+  if(post.settledAt&&row.last_operation==='settle-'+input.operation&&row.version===input.version+1)return json({data:post});
   if(row.version!==input.version)return json({error:'최신 대진표를 다시 불러온 뒤 점수를 반영해주세요.'},409);
+  if(post.settledAt)return json({data:post});
   const results=cleanResults(post.results,post.schedule);
   const isScored=ri=>post.schedule[ri]?.method!=='random';
   const absentSet=new Set(Array.isArray(post.absent)?post.absent:[]);
@@ -94,9 +92,10 @@ async function settleSchedule(db,id,input){
   const guestRows=(await db.prepare('SELECT * FROM guests WHERE hidden=0').all()).results;
   const gById=new Map(guestRows.map(r=>[r.guest_id,r]));
   const gByName=new Map(guestRows.map(r=>[r.name,r.guest_id]));
+  const promotedById=new Map(rankingRows.filter(r=>r.promoted_guest_id).map(r=>[r.promoted_guest_id,r.member_id]));
   const deltas=new Map(),gDeltas=new Map();
   const bump=(map,keyId,field)=>{const item=map.get(keyId)||{attendance:0,wins:0,losses:0,points:0};item[field]++;item.points+=field==='wins'?1:field==='losses'?-1:1;map.set(keyId,item);};
-  const resolve=(name,index)=>{const pid=Array.isArray(post.participantIds)?post.participantIds[index]:'';if(byId.has(pid))return{t:'m',id:pid};if(gById.has(pid))return{t:'g',id:pid};if(byName.has(name))return{t:'m',id:byName.get(name)};if(gByName.has(name))return{t:'g',id:gByName.get(name)};return null;};
+  const resolve=(name,index)=>{const pid=Array.isArray(post.participantIds)?post.participantIds[index]:'';if(byId.has(pid))return{t:'m',id:pid};if(gById.has(pid))return{t:'g',id:pid};if(promotedById.has(pid))return{t:'m',id:promotedById.get(pid)};if(pid)return null;if(byName.has(name))return{t:'m',id:byName.get(name)};if(gByName.has(name))return{t:'g',id:gByName.get(name)};return null;};
   const whoByName=new Map(post.names.map((name,index)=>[name,resolve(name,index)]));
   const addFor=(name,field)=>{const w=whoByName.get(name);if(!w)return;bump(w.t==='m'?deltas:gDeltas,w.id,field);};
   const attended=new Set();for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
@@ -126,16 +125,19 @@ async function settleSchedule(db,id,input){
     // The NOT NULL guard fails before any points/events are written.
     db.prepare("INSERT INTO ranking_settlements (schedule_id,settled_at,operation,rank_order_before) VALUES (CASE WHEN EXISTS (SELECT 1 FROM board_posts WHERE id=? AND kind='schedule' AND version=? AND last_operation=?) THEN ? ELSE NULL END,?,?,?)").bind(id,input.version+1,'settle-'+input.operation,id,at,input.operation,JSON.stringify(rankingRows.map(r=>r.member_id)))
   ];
-  for(const next of nextRows){
+  const memberUpdates=nextRows.map(next=>{
     const before=byId.get(next.member_id),d=deltas.get(next.member_id);
     const movement=d&&d.wins+d.losses>0&&!next.rank_protected?before.rank-next.rank:0;
-    statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,previous_points=?,attendance=?,wins=?,losses=?,updated_at=?,rank_movement=?,rank_protected=?,floor_protected_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,before.rank,before.points,next.attendance,next.wins,next.losses,at,movement,next.rank_protected,next.floor_protected_at,next.member_id));
-  }
-  for(const [memberId,delta] of deltas){const before=byId.get(memberId),after=nextRows.find(row=>row.member_id===memberId);statements.push(db.prepare('INSERT INTO ranking_events (schedule_id,member_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,rank_before,rank_after,seed_before,seed_after,created_at,floor_protected_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,memberId,delta.attendance,delta.wins,delta.losses,after.points-before.points,before.points,after.points,before.rank,after.rank,before.seed,after.seed,at,before.floor_protected_at));}
-  statements.push(db.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0'));
-  for(const g of gNext){if(!gDeltas.has(g.guest_id))continue;statements.push(db.prepare('UPDATE guests SET points=?,previous_points=?,attendance=?,wins=?,losses=?,rank_protected=?,floor_protected_at=? WHERE guest_id=?').bind(g.points,gById.get(g.guest_id).points,g.attendance,g.wins,g.losses,g.rank_protected,g.floor_protected_at,g.guest_id));}
-  for(const [gid,d] of gDeltas){const before=gById.get(gid),after=gNext.find(g=>g.guest_id===gid);statements.push(db.prepare('INSERT INTO guest_events (schedule_id,guest_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,created_at,floor_protected_before) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id,gid,d.attendance,d.wins,d.losses,after.points-before.points,before.points,after.points,at,before.floor_protected_at));}
-  try{await db.batch(statements);}catch(error){
+    return {...next,seed:seedForPoints(next.points),previous_rank:before.rank,previous_points:before.points,updated_at:at,rank_movement:movement};
+  });
+  statements.push(updateRows(db,'ranking_members','member_id',memberUpdates,['points','seed','rank','previous_rank','previous_points','attendance','wins','losses','updated_at','rank_movement','rank_protected','floor_protected_at'],['edit_version']));
+  const memberEvents=[...deltas].map(([memberId,d])=>{const before=byId.get(memberId),after=nextRows.find(r=>r.member_id===memberId);return {schedule_id:id,member_id:memberId,attendance_points:d.attendance,win_points:d.wins,loss_points:d.losses,total_points:after.points-before.points,points_before:before.points,points_after:after.points,rank_before:before.rank,rank_after:after.rank,seed_before:before.seed,seed_after:after.seed,created_at:at,floor_protected_before:before.floor_protected_at};});
+  statements.push(insertRows(db,'ranking_events',['schedule_id','member_id','attendance_points','win_points','loss_points','total_points','points_before','points_after','rank_before','rank_after','seed_before','seed_after','created_at','floor_protected_before'],memberEvents));
+  statements.push(db.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0,edit_version=edit_version+1 WHERE hidden=0'));
+  statements.push(updateRows(db,'guests','guest_id',gNext.filter(g=>gDeltas.has(g.guest_id)).map(g=>({...g,previous_points:gById.get(g.guest_id).points})),['points','previous_points','attendance','wins','losses','rank_protected','floor_protected_at']));
+  const guestEvents=[...gDeltas].map(([gid,d])=>{const before=gById.get(gid),after=gNext.find(g=>g.guest_id===gid);return {schedule_id:id,guest_id:gid,attendance_points:d.attendance,win_points:d.wins,loss_points:d.losses,total_points:after.points-before.points,points_before:before.points,points_after:after.points,created_at:at,floor_protected_before:before.floor_protected_at};});
+  statements.push(insertRows(db,'guest_events',['schedule_id','guest_id','attendance_points','win_points','loss_points','total_points','points_before','points_after','created_at','floor_protected_before'],guestEvents));
+  try{await commitRoster(db,revision,statements);}catch(error){
     const latest=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
     if(latest&&JSON.parse(latest.payload).settledAt)return json({data:unpack(latest)});
     if(!latest||latest.version!==input.version)return json({error:'다른 기기에서 대진이 변경되었습니다. 최신 내용을 확인한 뒤 다시 마감해주세요.',conflict:true},409);
@@ -145,11 +147,13 @@ async function settleSchedule(db,id,input){
   return json({data:unpack(saved)});
 }
 // 요청 053: 마감 취소 — 가장 최근에 마감한 대진표의 정산을 되돌린다. ranking_events의 델타를 역산해 점수·출석·승·패를 원복하고, 순위·시드를 다시 계산, settledAt·MVP 제거, 제목 복원, 정산·이벤트 기록 삭제.
-async function unsettleSchedule(db,id){
+async function unsettleSchedule(db,id,input={}){
+  const revision=await rosterRevision(db);
   const row=await db.prepare("SELECT * FROM board_posts WHERE id=? AND kind='schedule'").bind(id).first();
   if(!row)return json({error:'대진표를 찾을 수 없습니다.'},404);
   const post=unpack(row);
   if(!post.settledAt)return json({error:'아직 마감되지 않은 대진표입니다.'},400);
+  if(input.version!=null&&input.version!==row.version)return json({error:'다른 기기에서 대진이 변경되었습니다. 최신 내용을 확인한 뒤 다시 마감을 취소해주세요.',conflict:true},409);
   const latest=await db.prepare('SELECT schedule_id,rank_order_before FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();
   if(!latest||latest.schedule_id!==id)return json({error:'가장 최근에 마감한 대진표만 마감을 취소할 수 있어요.'},409);
   const events=(await db.prepare('SELECT * FROM ranking_events WHERE schedule_id=?').bind(id).all()).results;
@@ -176,22 +180,18 @@ async function unsettleSchedule(db,id){
     db.prepare('DELETE FROM ranking_settlements WHERE schedule_id=?').bind(id),
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation='unsettle',updated_at=? WHERE id=? AND kind='schedule'").bind(JSON.stringify(nextPayload),at,id)
   ];
-  for(const next of nextRows)statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,previous_points=?,attendance=?,wins=?,losses=?,updated_at=?,rank_movement=0,rank_protected=0,floor_protected_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,next.rank,next.points,next.attendance,next.wins,next.losses,at,next.floor_protected_at,next.member_id));
-  statements.push(db.prepare('UPDATE guests SET rank_protected=0 WHERE hidden=0'));
-  for(const gid of gTouched){const g=gRev.get(gid);statements.push(db.prepare('UPDATE guests SET points=?,previous_points=?,attendance=?,wins=?,losses=?,floor_protected_at=? WHERE guest_id=?').bind(g.points,g.points,g.attendance,g.wins,g.losses,g.floor_protected_at,gid));}
-  await db.batch(statements);
+  statements.push(updateRows(db,'ranking_members','member_id',nextRows.map(next=>({...next,seed:seedForPoints(next.points),previous_rank:next.rank,previous_points:next.points,updated_at:at,rank_movement:0,rank_protected:0})),['points','seed','rank','previous_rank','previous_points','attendance','wins','losses','updated_at','rank_movement','rank_protected','floor_protected_at'],['edit_version']));
+  statements.push(db.prepare('UPDATE guests SET rank_protected=0,edit_version=edit_version+1 WHERE hidden=0'));
+  statements.push(updateRows(db,'guests','guest_id',[...gTouched].map(gid=>{const g=gRev.get(gid);return {...g,previous_points:g.points};}),['points','previous_points','attendance','wins','losses','floor_protected_at']));
+  await commitRoster(db,revision,statements);
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
 }
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
-  const posts=(await env.DB.prepare('SELECT id,kind,payload,version,last_operation,created_at,updated_at FROM board_posts ORDER BY created_at').all()).results;
-  const members=(await env.DB.prepare('SELECT * FROM ranking_members').all()).results;
-  const guests=(await env.DB.prepare('SELECT * FROM guests').all()).results;
-  const settlements=(await env.DB.prepare('SELECT * FROM ranking_settlements').all()).results;
-  const rankingEvents=(await env.DB.prepare('SELECT * FROM ranking_events').all()).results;
-  const guestEvents=(await env.DB.prepare('SELECT * FROM guest_events').all()).results;
-  const peopleChanges=(await env.DB.prepare('SELECT * FROM people_changes').all()).results;
+  // One read transaction prevents a backup mixing pre-/post-settlement tables.
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
   const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges});
@@ -212,6 +212,9 @@ export default {async fetch(request,env){
   if(path==='/api/live-courts')return liveCourts(request,env);
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
+  if(path.startsWith('/api/')){
+    try{
+      if(!env.DB)throw Error('Storage unavailable');
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({error:'Storage unavailable'},503);
     const weekly=await readWeeklyResults(env.DB);
@@ -219,9 +222,6 @@ export default {async fetch(request,env){
     const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses,rank_protected,floor_protected_at,edit_version FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>weekly.guest(r)).map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses,rank_protected:r.rank_protected,floor_protected_at:r.floor_protected_at,edit_version:r.edit_version}));
     return json({people:[...members,...guests],displaySettlementId:weekly.scheduleId});
   }
-  if(path.startsWith('/api/')){
-    try{
-      if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
         const weekly=await readWeeklyResults(env.DB);
         const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at,edit_version,promoted_guest_id FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
@@ -233,25 +233,26 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 추가할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-        const name=String(input.name||'').trim(),type=input.type,points=Math.round(Number(input.points));
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'입력 내용을 확인해주세요.'},400);
+        const name=typeof input.name==='string'?input.name.trim():'',type=input.type,points=Number(input.points);
         if(!name||name.length>100)return json({error:'닉네임을 확인해주세요.'},400);
         if(type!=='member'&&type!=='guest')return json({error:'회원 또는 게스트를 선택해주세요.'},400);
         if(!Number.isInteger(points)||points<20||points>1000)return json({error:'시드 점수는 20~1000 사이 숫자로 입력해주세요.'},400);
+        const revision=await rosterRevision(env.DB);
         const memberNameDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
         const guestNameDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=?').bind(name).first();
         if(memberNameDup||guestNameDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
         const at=new Date().toISOString();
         if(type==='member'){
           const id='custom-m-'+crypto.randomUUID();
-          await env.DB.batch([
+          await commitRoster(env.DB,revision,[
             env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden) VALUES (?,?,?,?,?,?,?,0,0,0,?,0)').bind(id,name,points,seedForPoints(points),999999,999999,points,at),
             env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'member',id,'create',null,name,null,points,'운영진이 새 회원을 추가함',at)
-          ]);
-          await reorderMembers(env.DB);
+          ],[{member_id:id,name,points,rank:999999}]);
           return json({data:{id,name,type,points,seed:seedForPoints(points)}});
         }
         const gid='custom-g-'+crypto.randomUUID();
-        await env.DB.batch([
+        await commitRoster(env.DB,revision,[
           env.DB.prepare('INSERT INTO guests (guest_id,name,points,previous_points,attendance,wins,losses,hidden,created_at) VALUES (?,?,?,?,0,0,0,0,?)').bind(gid,name,points,points,at),
           env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'guest',gid,'create',null,name,null,points,'운영진이 새 게스트를 추가함',at)
         ]);
@@ -261,20 +262,22 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 정보를 수정할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>4000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-        const id=String(input.id||''),type=input.type,name=String(input.name||'').trim(),reason=String(input.reason||'').trim();
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'입력 내용을 확인해주세요.'},400);
+        const id=String(input.id||''),type=input.type,name=typeof input.name==='string'?input.name.trim():'',reason=typeof input.reason==='string'?input.reason.trim():'';
         const points=Number(input.points),expectedVersion=Number(input.expectedVersion);
         if(!/^[A-Za-z0-9-]{1,120}$/.test(id)||!['member','guest'].includes(type))return json({error:'수정 대상을 확인해주세요.'},400);
         if(!name||name.length>100)return json({error:'닉네임을 확인해주세요.'},400);
         if(!Number.isInteger(points)||points<20||points>1000)return json({error:'시드 점수는 20~1000 사이 숫자로 입력해주세요.'},400);
         if(!Number.isInteger(expectedVersion)||expectedVersion<1)return json({error:'최신 정보를 다시 불러와주세요.'},400);
         if(!reason||reason.length>300)return json({error:'수정 사유를 1~300자로 입력해주세요.'},400);
+        const revision=await rosterRevision(env.DB);
         const current=type==='member'
-          ?await env.DB.prepare('SELECT member_id AS person_id,name,points,edit_version FROM ranking_members WHERE member_id=? AND hidden=0').bind(id).first()
+          ?await env.DB.prepare('SELECT member_id AS person_id,name,points,edit_version,promoted_guest_id FROM ranking_members WHERE member_id=? AND hidden=0').bind(id).first()
           :await env.DB.prepare('SELECT guest_id AS person_id,name,points,edit_version FROM guests WHERE guest_id=? AND hidden=0').bind(id).first();
         if(!current)return json({error:'수정할 사람을 찾지 못했습니다. 목록을 새로고침해주세요.'},404);
         if(current.edit_version!==expectedVersion)return json({error:'다른 운영진이 먼저 수정했습니다. 목록을 새로고침한 뒤 다시 시도해주세요.',conflict:true},409);
-        const memberDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0 AND member_id<>?').bind(name,type==='member'?id:'').first();
-        const guestDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND hidden=0 AND guest_id<>?').bind(name,type==='guest'?id:'').first();
+        const memberDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND member_id<>?').bind(name,type==='member'?id:'').first();
+        const guestDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND guest_id<>?').bind(name,type==='guest'?id:(current.promoted_guest_id||'')).first();
         if(memberDup||guestDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
         const at=new Date().toISOString(),pointsChanged=points!==current.points;
         const updateSql=type==='member'
@@ -283,10 +286,8 @@ export default {async fetch(request,env){
         const updateStatement=type==='member'
           ?env.DB.prepare(updateSql).bind(name,points,seedForPoints(points),pointsChanged?1:0,points,pointsChanged?1:0,pointsChanged?1:0,pointsChanged?1:0,at,id,expectedVersion)
           :env.DB.prepare(updateSql).bind(name,points,pointsChanged?1:0,points,pointsChanged?1:0,pointsChanged?1:0,id,expectedVersion);
-        const updateResult=await updateStatement.run();
-        if(!updateResult?.meta?.changes)return json({error:'다른 운영진이 먼저 수정했습니다. 목록을 새로고침한 뒤 다시 시도해주세요.',conflict:true},409);
-        await env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),type,id,'update',current.name,name,current.points,points,reason,at).run();
-        if(type==='member')await reorderMembers(env.DB);
+        const history=env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),type,id,'update',current.name,name,current.points,points,reason,at);
+        await commitRoster(env.DB,revision,[updateStatement,history],type==='member'?[{member_id:id,name,points,...(pointsChanged?{floor_protected_at:null}:{})}]:null);
         return json({data:{id,type,name,points,seed:seedForPoints(points),edit_version:expectedVersion+1}});
       }
       if(path==='/api/people/history'&&request.method==='GET'){
@@ -304,33 +305,34 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>8000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-        const ids=Array.isArray(input.ids)?input.ids.filter(x=>typeof x==='string'&&x.length<=100).slice(0,300):[];
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'입력 내용을 확인해주세요.'},400);
+        const ids=Array.isArray(input.ids)?[...new Set(input.ids.filter(x=>typeof x==='string'&&x.length<=100))].slice(0,300):[];
         if(!ids.length)return json({error:'삭제할 사람을 선택해주세요.'},400);
-        const at=new Date().toISOString(),stmts=[];
-        for(const id of ids){stmts.push(env.DB.prepare('UPDATE ranking_members SET hidden=1,updated_at=? WHERE member_id=?').bind(at,id));stmts.push(env.DB.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').bind(id));}
-        await env.DB.batch(stmts);
-        await reorderMembers(env.DB);
-        return json({data:{hidden:ids.length}});
+        const revision=await rosterRevision(env.DB),at=new Date().toISOString(),encodedIds=JSON.stringify(ids);
+        const removedMembers=(await env.DB.prepare('SELECT member_id AS id,name,points FROM ranking_members WHERE hidden=0 AND member_id IN (SELECT value FROM json_each(?))').bind(encodedIds).all()).results;
+        const removedGuests=(await env.DB.prepare('SELECT guest_id AS id,name,points FROM guests WHERE hidden=0 AND guest_id IN (SELECT value FROM json_each(?))').bind(encodedIds).all()).results;
+        const histories=[...removedMembers.map(p=>({...p,type:'member'})),...removedGuests.map(p=>({...p,type:'guest'}))].map(p=>({id:'pc-'+crypto.randomUUID(),person_type:p.type,person_id:p.id,action:'hide',before_name:p.name,after_name:p.name,before_points:p.points,after_points:p.points,reason:'운영진이 명단에서 숨김',created_at:at}));
+        const stmts=[env.DB.prepare('UPDATE ranking_members SET hidden=1,updated_at=?,edit_version=edit_version+1 WHERE hidden=0 AND member_id IN (SELECT value FROM json_each(?))').bind(at,encodedIds),env.DB.prepare('UPDATE guests SET hidden=1,edit_version=edit_version+1 WHERE hidden=0 AND guest_id IN (SELECT value FROM json_each(?))').bind(encodedIds),insertRows(env.DB,'people_changes',['id','person_type','person_id','action','before_name','after_name','before_points','after_points','reason','created_at'],histories)];
+        await commitRoster(env.DB,revision,stmts,ids.map(member_id=>({member_id,hidden:1})));
+        return json({data:{hidden:removedMembers.length+removedGuests.length}});
       }
       if(path==='/api/people/promote'&&request.method==='POST'){
         // 요청 069: 게스트를 회원으로 이관(점수·출석·승·패 그대로 옮김).
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 이관할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>8000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-        const ids=Array.isArray(input.ids)?input.ids.filter(x=>typeof x==='string'&&x.length<=100).slice(0,300):[];
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'입력 내용을 확인해주세요.'},400);
+        const ids=Array.isArray(input.ids)?[...new Set(input.ids.filter(x=>typeof x==='string'&&x.length<=100))].slice(0,300):[];
         if(!ids.length)return json({error:'이관할 게스트를 선택해주세요.'},400);
+        const revision=await rosterRevision(env.DB);
         const chosen=(await env.DB.prepare('SELECT * FROM guests WHERE hidden=0').all()).results.filter(g=>ids.includes(g.guest_id));
         if(!chosen.length)return json({error:'이관할 게스트를 찾지 못했습니다.'},404);
-        for(const g of chosen){const dup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0').bind(g.name).first();if(dup)return json({error:`이미 회원에 같은 이름(${g.name})이 있어요. 이름을 바꾼 뒤 이관해주세요.`},409);}
-        const at=new Date().toISOString(),stmts=[];
-        for(const g of chosen){
-          const mid='custom-m-'+crypto.randomUUID();
-          stmts.push(env.DB.prepare('INSERT INTO ranking_members (member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,updated_at,hidden,rank_protected,floor_protected_at,promoted_guest_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)').bind(mid,g.name,g.points,seedForPoints(g.points),999999,999999,g.previous_points,g.attendance,g.wins,g.losses,at,g.rank_protected,g.floor_protected_at,g.guest_id));
-          stmts.push(env.DB.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').bind(g.guest_id));
-          stmts.push(env.DB.prepare('INSERT INTO people_changes (id,person_type,person_id,action,before_name,after_name,before_points,after_points,reason,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind('pc-'+crypto.randomUUID(),'guest',g.guest_id,'promote',g.name,g.name,g.points,g.points,'운영진이 게스트를 회원으로 이관함',at));
-        }
-        await env.DB.batch(stmts);
-        await reorderMembers(env.DB);
+        const memberNames=new Set((await env.DB.prepare('SELECT name FROM ranking_members').all()).results.map(r=>r.name));
+        for(const g of chosen){if(memberNames.has(g.name))return json({error:`이미 회원에 같은 이름(${g.name})이 있어요. 이름을 바꾼 뒤 이관해주세요.`},409);memberNames.add(g.name);}
+        const at=new Date().toISOString(),memberChanges=chosen.map(g=>({member_id:'custom-m-'+crypto.randomUUID(),name:g.name,points:g.points,seed:seedForPoints(g.points),rank:999999,previous_rank:999999,previous_points:g.previous_points,attendance:g.attendance,wins:g.wins,losses:g.losses,updated_at:at,hidden:0,rank_protected:g.rank_protected,floor_protected_at:g.floor_protected_at,promoted_guest_id:g.guest_id}));
+        const histories=chosen.map(g=>({id:'pc-'+crypto.randomUUID(),person_type:'guest',person_id:g.guest_id,action:'promote',before_name:g.name,after_name:g.name,before_points:g.points,after_points:g.points,reason:'운영진이 게스트를 회원으로 이관함',created_at:at}));
+        const stmts=[insertRows(env.DB,'ranking_members',['member_id','name','points','seed','rank','previous_rank','previous_points','attendance','wins','losses','updated_at','hidden','rank_protected','floor_protected_at','promoted_guest_id'],memberChanges),env.DB.prepare('UPDATE guests SET hidden=1,edit_version=edit_version+1 WHERE guest_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(chosen.map(g=>g.guest_id))),insertRows(env.DB,'people_changes',['id','person_type','person_id','action','before_name','after_name','before_points','after_points','reason','created_at'],histories)];
+        await commitRoster(env.DB,revision,stmts,memberChanges);
         return json({data:{promoted:chosen.length}});
       }
       // 요청 073: 관리자 — 운영진 임명/해제(왕관). 관리자 헤더(x-kokkiri-admin) 필요.
@@ -338,6 +340,7 @@ export default {async fetch(request,env){
         if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 변경할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        if(!input||typeof input!=='object'||Array.isArray(input)||![true,false,0,1].includes(input.on))return json({error:'대상을 확인해주세요.'},400);
         const memberId=String(input.memberId||''),on=input.on?1:0;
         if(!memberId)return json({error:'대상을 확인해주세요.'},400);
         const r=await env.DB.prepare('UPDATE ranking_members SET is_operator=? WHERE member_id=? AND hidden=0').bind(on,memberId).run();
@@ -375,13 +378,15 @@ export default {async fetch(request,env){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 점수를 반영할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>4000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);if(!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('점수 반영 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
-        return settleSchedule(env.DB,settleMatch[1],input);
+        return await settleSchedule(env.DB,settleMatch[1],input);
       }
       const unsettleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/unsettle$/);
       if(unsettleMatch){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 마감을 취소할 수 있습니다.'},403);
-        return unsettleSchedule(env.DB,unsettleMatch[1]);
+        const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
+        let input;try{input=raw?JSON.parse(raw):{};if(!input||typeof input!=='object'||Array.isArray(input)||(input.version!=null&&(!Number.isInteger(input.version)||input.version<1)))throw Error();}catch{return json({error:'마감 취소 요청을 확인해주세요.'},400);}
+        return await unsettleSchedule(env.DB,unsettleMatch[1],input);
       }
       const progressMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/progress$/);
       if(progressMatch){
@@ -413,8 +418,9 @@ export default {async fetch(request,env){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
         const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용을 확인해주세요.'},413);
         let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
+        if(!input||typeof input!=='object'||Array.isArray(input))return json({error:'승패 정보를 확인해주세요.'},400);
         const rkey=String(input.key||''),winner=input.winner;
-        if(!/^\d{1,3}-\d{1,3}$/.test(rkey)||!validResult(winner))return json({error:'승패 정보를 확인해주세요.'},400);
+        if(!/^(0|[1-9]\d{0,2})-(0|[1-9]\d{0,2})$/.test(rkey)||!validResult(winner))return json({error:'승패 정보를 확인해주세요.'},400);
         const row=await env.DB.prepare("SELECT * FROM board_posts WHERE id=? AND kind='schedule'").bind(resultMatch[1]).first();
         if(!row)return json({error:'대진표를 찾을 수 없습니다.'},404);
         const post=unpack(row);
@@ -456,10 +462,11 @@ export default {async fetch(request,env){
       }
       if(request.method==='DELETE'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
-        const existing=await env.DB.prepare('SELECT payload,kind FROM board_posts WHERE id=?').bind(id).first();
+        const existing=await env.DB.prepare('SELECT payload,kind,version FROM board_posts WHERE id=?').bind(id).first();
         if(!existing)return json({error:'삭제할 게시글이 없습니다.'},404);
         if(existing.kind==='schedule'&&JSON.parse(existing.payload).settledAt)return json({error:'이미 점수가 반영된 대진표는 삭제할 수 없습니다.'},409);
-        await env.DB.prepare('DELETE FROM board_posts WHERE id=?').bind(id).run();
+        const deleted=await env.DB.prepare('DELETE FROM board_posts WHERE id=? AND version=?').bind(id,existing.version).run();
+        if(!deleted.meta.changes)return json({error:'다른 기기에서 게시글이 변경되었습니다. 최신 내용을 확인한 뒤 다시 삭제해주세요.',conflict:true},409);
         return json({data:{deleted:true}});
       }
       if(request.method!=='PUT')return json({error:'허용되지 않은 요청입니다.'},405);
@@ -495,7 +502,7 @@ export default {async fetch(request,env){
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
       if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);
       return json({data:unpack(row)});
-    }catch(error){console.error('Board request failed',error);return json({error:'저장소에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
+    }catch(error){if(error?.conflict)return json({error:error.message,conflict:true},409);console.error('Board request failed',error);return json({error:'저장소에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
   }
   if(path!=='/'&&!editor&&!admin)return new Response('페이지를 찾을 수 없습니다.',{status:404});
   return new Response(page(editor,admin),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'}});

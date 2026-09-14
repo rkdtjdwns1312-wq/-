@@ -12,9 +12,11 @@ import { runMatchProgressChecks } from './check-match-progress.mjs';
 import { runLiveCourtsChecks } from './check-live-courts.mjs';
 import { runProgressUIChecks } from './check-progress-ui.mjs';
 import { runLiveUIChecks } from './check-live-ui.mjs';
+import { runServerAuditChecks } from './check-server-audit.mjs';
+import { runClientAuditChecks } from './check-client-audit.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
-const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
+const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
 const env={DB,EDITOR_KEY:'test-editor-key',OPERATOR_PASSWORD:'test-password',ADMIN_PASSWORD:'admin-pass'};
 const origin='http://localhost:4173';
 const login=(password,headers={})=>worker.fetch(new Request(origin+'/api/operator-login',{method:'POST',headers:{origin,'content-type':'application/json','cf-connecting-ip':'test-client',...headers},body:JSON.stringify({password})}),env);
@@ -230,6 +232,8 @@ await runMatchProgressChecks();
 await runProgressUIChecks();
 await runLiveCourtsChecks({worker,env,origin,db});
 await runLiveUIChecks();
+await runServerAuditChecks();
+await runClientAuditChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
@@ -242,7 +246,8 @@ if(process.argv.includes('--serve')){
       res.end('<!doctype html><html><head><title>390px local preview</title></head><body style="margin:0;background:#ddd"><iframe title="390px mobile preview" src="/#'+hash+'" style="width:390px;height:844px;border:0;display:block"></iframe></body></html>');return;
     }
     try{const chunks=[];for await(const chunk of req)chunks.push(chunk);
-      const r=await worker.fetch(new Request(origin+req.url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);
+      const previewOrigin='http://'+(req.headers.host||'localhost:'+previewPort);
+      const r=await worker.fetch(new Request(previewOrigin+req.url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);
       res.writeHead(r.status,Object.fromEntries(r.headers));res.end(Buffer.from(await r.arrayBuffer()));
     }catch{res.writeHead(500);res.end('Preview unavailable');}
   }).listen(previewPort,'127.0.0.1',()=>console.log('Local URL: http://localhost:'+previewPort));

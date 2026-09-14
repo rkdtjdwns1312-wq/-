@@ -25,6 +25,35 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.equal(t.generate(players(4).map(p=>({...p,lateRounds:2})),1,3,['same','balanced','random'])[0].g.length,0);
   const onlyPriority=players(5).map(p=>({...p,type:'guest'}));
   assert.throws(()=>t.generate(onlyPriority,1,6,Array(6).fill('same')),/휴식 1회 제한/);
+  // Invalid generator settings previously reached group splitting and could make a
+  // two-player match (for example, 8 players on 1.5 courts). Keep this helper
+  // aligned with the server's schedule input limits instead.
+  for(const courts of [0,-1,1.5,21,NaN])assert.throws(()=>t.generate(players(8),courts,1,['same']),/코트와 라운드/);
+  for(const rounds of [0,-1,1.5,21,NaN])assert.throws(()=>t.generate(players(8),1,rounds,['same']),/코트와 라운드/);
+  assert.throws(()=>t.generate(players(8),1,1,'same'),/라운드 방식/);
+  assert.throws(()=>t.generate(players(8),1,1,['other']),/라운드 방식/);
+  assert.throws(()=>t.generate(players(3),1,1,['same']),/참가자 명단/);
+  assert.throws(()=>t.generate(players(201),20,1,['same']),/참가자 명단/);
+  assert.throws(()=>t.generate([...players(7),{...players(1)[0]}],2,1,['same']),/참가자 명단/);
+  assert.throws(()=>t.generate(players(8).map((p,i)=>({...p,lateRounds:i===0?6:0})),2,1,['same']),/늦참은 0~5/);
+  assert.throws(()=>t.generate(players(8).map((p,i)=>({...p,lateRounds:i===0?1.5:0})),2,1,['same']),/늦참은 0~5/);
+  assert.throws(()=>t.generate(players(8).map((p,i)=>({...p,lateRounds:i===0?'2':0})),2,1,['same']),/늦참은 0~5/);
+  // Seeded randomized boundaries: every generated match remains four distinct
+  // players, and late/rest/playing continue to partition the entire roster.
+  const withSeed=(seed,run)=>{const original=Math.random;let state=seed>>>0;Math.random=()=>{state=(state*1664525+1013904223)>>>0;return state/0x100000000;};try{return run();}finally{Math.random=original;}};
+  withSeed(0x5ced1234,()=>{for(let trial=0;trial<160;trial++){
+    const n=4+(trial*37)%77,courts=1+(trial*11)%20,rounds=1+trial%5;
+    const roster=players(n).map((p,i)=>({...p,lateRounds:i%11===0?i%6:0}));
+    const methods=Array.from({length:rounds},(_,ri)=>['random','same','balanced'][(trial+ri)%3]);
+    const made=t.generate(roster,courts,rounds,methods);
+    assert.equal(made.length,rounds);
+    for(const r of made){const playing=r.g.flat();
+      assert.ok(r.g.every(match=>match.length===4&&new Set(match).size===4));
+      assert.equal(new Set(playing).size,playing.length);
+      assert.equal(new Set([...playing,...r.rest,...r.late]).size,n);
+      assert.equal(playing.length+r.rest.length+r.late.length,n);
+    }
+  }});
   for(const n of [8,9,13,28,33])for(let trial=0;trial<12;trial++){
     const roster=players(n);roster[0].lateRounds=2;roster[1].type='guest';roster[2].operator=true;roster[3].lateRegistration=true;
     const rounds=t.generate(roster,Math.max(1,Math.floor(n/4)-1),5,['same','balanced','random','same','balanced']);
@@ -41,13 +70,26 @@ export async function runScheduleChecks({worker,env,origin}){
     }
     for(const special of roster.slice(1,4))assert.ok(rounds.filter(r=>r.rest.includes(special.name)).length<=1);
   }
-  const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'}};
+  const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
   assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);
   assert.deepEqual(edit.schedule[0].rest,['1']);assert.deepEqual(edit.schedule[0].late,['9']);
   assert.deepEqual(edit.results,{'0-1':'b'});
+  assert.deepEqual(edit.matchProgress,{'0-1':'playing'});
   assert.throws(()=>t.replacePlayer(edit,0,0,0,'2'),/같은 경기/);
   assert.throws(()=>t.replacePlayer(edit,0,0,0,'9'),/아직 도착/);
+  const progress={schedule:[
+    {method:'same',g:[['1','2','3','4'],['5','6','7','8']]},
+    {method:'random',g:[['1','3','5','7']]},
+    {method:'balanced',g:[['2','4','6','8']]}
+  ],results:{'0-0':'a'},absent:['8'],matchProgress:{'0-0':'playing','0-1':'playing','1-0':'finished','2-0':'finished','2-1':'playing','bad':'playing'}};
+  assert.deepEqual(t.cleanProgress(progress),{'1-0':'finished'});
+  progress.schedule[1].g=[];progress.schedule.push({method:'random',g:[['1','2','3','4']]});
+  progress.matchProgress={'1-0':'finished','3-0':'playing','3-1':'playing'};
+  assert.deepEqual(t.cleanProgress(progress),{'3-0':'playing'});
+  assert.equal(t.matchState({...progress,matchProgress:{'3-0':'playing'}},3,0),'playing');
+  assert.equal(t.matchState({...progress,results:{'3-0':'a'}},3,0),'finished');
+  assert.equal(t.matchState({...progress,settledAt:'done'},3,0),'finished');
 
   const call=(path,method='GET',body)=>worker.fetch(new Request(origin+path,{method,headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},...(body?{body:JSON.stringify(body)}:{})}),env);
   const members=(await (await call('/api/rankings')).json()).items.slice(0,13);

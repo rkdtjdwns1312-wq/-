@@ -19,6 +19,10 @@ export function createScheduleTools(){
     refreshRound(d,ri);
   }
   function generate(roster,courts,rounds,methods){
+    if(!Array.isArray(roster)||roster.length<4||roster.length>200||roster.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(roster.map(p=>p.id)).size!==roster.length||new Set(roster.map(p=>p.name)).size!==roster.length)throw Error('참가자 명단을 확인해주세요.');
+    if(!Number.isInteger(courts)||courts<1||courts>20||!Number.isInteger(rounds)||rounds<1||rounds>20)throw Error('코트와 라운드 수를 확인해주세요.');
+    if(!Array.isArray(methods))throw Error('라운드 방식을 확인해주세요.');
+    for(const p of roster){const late=p.lateRounds??0;if(!Number.isInteger(late)||late<0||late>5)throw Error('늦참은 0~5라운드 사이로 지정해주세요.');}
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const pts=p=>Number.isFinite(p.points)?p.points:0;
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
@@ -37,6 +41,7 @@ export function createScheduleTools(){
       const resting=candidates.slice(0,restSlots),restIds=new Set(resting.map(p=>p.id));
       resting.forEach(p=>restCount.set(p.id,restCount.get(p.id)+1));
       const playing=available.filter(p=>!restIds.has(p.id)),method=methods[ri]||'random',groups=[];
+      if(!['same','balanced','random'].includes(method))throw Error('라운드 방식을 확인해주세요.');
       if(method==='random'){
         const sorted=shuffle(playing);for(let i=0;i<sorted.length;i+=4)groups.push(sorted.slice(i,i+4));
       }else{

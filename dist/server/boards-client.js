@@ -12,18 +12,21 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   updateDaysTogether();setInterval(updateDaysTogether,60000);
   function openLoginDialog(title,fieldLabel,endpoint,redirectRe,goLabel,focusBack){
     dialog.innerHTML='<form id="loginForm"><div class="dialog-head"><h2 id="pickerTitle">'+esc(title)+'</h2><button type="button" id="closeLogin" aria-label="닫기">×</button></div><label for="loginPw">'+esc(fieldLabel)+'</label><input id="loginPw" type="password" inputmode="numeric" autocomplete="current-password" required maxlength="128" autofocus><p id="loginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="loginSubmit" class="primary">'+esc(goLabel)+'</button><button type="button" id="cancelLogin">취소</button></div></form>';
+    const form=$('loginForm'),password=$('loginPw'),submit=$('loginSubmit'),errorOutput=$('loginError');
+    const active=()=>dialog.open&&dialog.querySelector('#loginForm')===form;
     const close=()=>dialog.close();$('closeLogin').onclick=close;$('cancelLogin').onclick=close;
-    $('loginForm').onsubmit=async e=>{
-      e.preventDefault();const submit=$('loginSubmit');if(submit.disabled)return;
-      submit.disabled=true;submit.textContent='확인 중…';$('loginError').textContent='';
+    form.onsubmit=async e=>{
+      e.preventDefault();if(submit.disabled)return;
+      submit.disabled=true;submit.textContent='확인 중…';errorOutput.textContent='';
       try{
-        const result=await api(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('loginPw').value})});
+        const result=await api(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:password.value})});
+        if(!active())return;
         if(!redirectRe.test(result.redirect||''))throw Error('주소를 확인하지 못했습니다.');
         location.assign(result.redirect);
-      }catch(error){$('loginError').textContent=error.message;$('loginPw').focus();$('loginPw').select();}
-      finally{submit.disabled=false;submit.textContent=goLabel;}
+      }catch(error){if(active()){errorOutput.textContent=error.message;password.focus();password.select();}}
+      finally{if(active()){submit.disabled=false;submit.textContent=goLabel;}}
     };
-    dialog.onclose=()=>{dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
+    dialog.onclose=()=>{dialog.onclose=null;dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
   }
   if(!EDITOR&&!ADMIN){
     // 요청 075: 항상 노출된 버튼 대신 작은 사람 실루엣 버튼 → 누르면 두 항목(운영진권한 위 / 홈페이지관리자 권한 아래).
@@ -78,7 +81,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     closeList();
     return parts.join('');
   }
-  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false;
+  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false;
   let liveView=null;
   const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
@@ -161,8 +164,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     }
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
-    if($('endMatch'))$('endMatch').onclick=()=>endMatch(d);
-    if($('unsettlePost'))$('unsettlePost').onclick=async()=>{if(!(await confirmDialog('이 대진의 마감을 취소할까요? 반영됐던 출석·승패 점수가 되돌려지고, 다시 기록·수정할 수 있게 됩니다.')))return;try{await api('/api/posts/'+encodeURIComponent(d.id)+'/unsettle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:'{}'});message('마감을 취소했어요. 다시 기록할 수 있습니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}catch(e){message(e.message,true);}};
+    if($('endMatch'))$('endMatch').onclick=()=>endMatch(d,token);
+    if($('unsettlePost'))$('unsettlePost').onclick=()=>unsettlePost(d,token);
     const rtabs=app.querySelector('.round-tabs');if(rtabs)rtabs.onclick=e=>{const b=e.target.closest('.round-tab');if(!b)return;viewRound=+b.dataset.roundTab;app.querySelectorAll('.round-tab').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on));});app.querySelectorAll('[data-round-panel]').forEach(p=>{p.hidden=(+p.dataset.roundPanel)!==viewRound;});};
     startDetailPoll(d,token);
   }
@@ -281,26 +284,44 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   }
   function applyWin(matchEl,w){if(!matchEl)return;matchEl.classList.remove('result-a','result-b');if(w)matchEl.classList.add('has-result','result-'+w);else matchEl.classList.remove('has-result');const wraps=matchEl.querySelectorAll('.team-wrap');if(wraps[0])wraps[0].classList.toggle('win',w==='a');if(wraps[1])wraps[1].classList.toggle('win',w==='b');matchEl.querySelectorAll('.win-pick').forEach(b=>{const on=b.dataset.winner===w;b.classList.toggle('picked',on);b.setAttribute('aria-pressed',String(on));});if(w){const h=matchEl.querySelector('.match-hint');if(h)h.remove();}}
   async function saveResult(id,key,winner){return api('/api/posts/'+encodeURIComponent(id)+'/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key,winner})});}
-  async function endMatch(d){
-    if(!(await confirmDialog('정말 이 대진을 마감할까요? 점수가 반영되고, 시드현황의 순위·점수 변동과 출석·승패 표시가 이 대진의 결과로 바뀝니다. (마감 후에도 되돌릴 수 있어요.)')))return;
-    if(saving)return;saving=true;message('점수를 반영하는 중…');
-    try{const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;await api('/api/posts/'+encodeURIComponent(d.id)+'/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:fresh.version,operation:crypto.randomUUID()})});message('점수 반영이 완료되었습니다. 시드현황에 새 순위가 반영됩니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}
-    catch(e){message(e.message,true);}finally{saving=false;}
+  async function endMatch(d,token){
+    if(saving||ending||!currentDetail(d.id,token))return;ending=true;
+    try{
+      if(!(await confirmDialog('정말 이 대진을 마감할까요? 점수가 반영되고, 시드현황의 순위·점수 변동과 출석·승패 표시가 이 대진의 결과로 바뀝니다. (마감 후에도 되돌릴 수 있어요.)')))return;
+      if(!currentDetail(d.id,token))return;saving=true;message('점수를 반영하는 중…');
+      try{const response=await api('/api/posts/'+encodeURIComponent(d.id)+'/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:d.version,operation:crypto.randomUUID()})});if(Number(response?.data?.version)!==d.version+1)throw Error('최신 대진표를 다시 확인한 뒤 마감을 눌러주세요.');if(!currentDetail(d.id,token))return;message('점수 반영이 완료되었습니다. 시드현황에 새 순위가 반영됩니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}
+      catch(e){if(currentDetail(d.id,token)){message(e.message,true);if(/다른 기기|최신|충돌/.test(e.message||''))await refreshDetail(d,token);}}
+      finally{saving=false;}
+    }finally{ending=false;}
   }
-  function confirmDialog(msg){return new Promise(resolve=>{let done=false;const finish=v=>{if(done)return;done=true;try{dialog.close();}catch(e){}resolve(v);};dialog.innerHTML='<div class="confirm-box"><p class="confirm-msg">'+esc(msg)+'</p><div class="confirm-actions"><button id="confirmNo">아니오</button><button id="confirmYes" class="primary">예</button></div></div>';$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.addEventListener('cancel',()=>finish(false),{once:true});dialog.showModal();});}
+  async function unsettlePost(d,token){
+    if(saving||unsettling||!currentDetail(d.id,token))return;unsettling=true;
+    try{
+      if(!(await confirmDialog('이 대진의 마감을 취소할까요? 반영됐던 출석·승패 점수가 되돌려지고, 다시 기록·수정할 수 있게 됩니다.')))return;
+      if(!currentDetail(d.id,token))return;saving=true;
+      try{const response=await api('/api/posts/'+encodeURIComponent(d.id)+'/unsettle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:d.version})});if(Number(response?.data?.version)!==d.version+1)throw Error('최신 대진표를 다시 확인한 뒤 마감 취소를 눌러주세요.');if(!currentDetail(d.id,token))return;message('마감을 취소했어요. 다시 기록할 수 있습니다.');routeToken++;detail(d.id,routeToken);window.scrollTo(0,0);}
+      catch(e){if(currentDetail(d.id,token)){message(e.message,true);if(/다른 기기|최신|충돌/.test(e.message||''))await refreshDetail(d,token);}}
+      finally{saving=false;}
+    }finally{unsettling=false;}
+  }
+  function confirmDialog(msg){return new Promise(resolve=>{let done=false;const onCancel=e=>{e.preventDefault();finish(false);},onClose=()=>finish(false),finish=v=>{if(done)return;done=true;dialog.removeEventListener('cancel',onCancel);dialog.removeEventListener('close',onClose);if(dialog.open)try{dialog.close();}catch(e){}resolve(v);};dialog.innerHTML='<div class="confirm-box"><p class="confirm-msg">'+esc(msg)+'</p><div class="confirm-actions"><button id="confirmNo">아니오</button><button id="confirmYes" class="primary">예</button></div></div>';$('confirmYes').onclick=()=>finish(true);$('confirmNo').onclick=()=>finish(false);dialog.addEventListener('cancel',onCancel);dialog.addEventListener('close',onClose);dialog.showModal();});}
   async function openPicker(existing){
     if(!EDITOR)return;
+    const token=routeToken;
     try{await getPeople();}catch(e){message(e.message,true);return;}
-    if(existing&&Array.isArray(existing.participantIds)&&Array.isArray(existing.names))existing.participantIds.forEach((pid,i)=>{const nm=existing.names[i];if(pid&&typeof nm==='string'&&nm.trim()&&!people.some(p=>p.id===pid))people.push({id:pid,name:nm,type:'guest',seed:'미정',points:0,adhoc:true});});
-    let active='member',selected=new Set(existing?.participantIds?.length?existing.participantIds:people.filter(p=>existing?.names.includes(nameOf(p))).map(p=>p.id));
+    if(token!==routeToken)return;
+    const pickerPeople=people.slice();
+    const pickerNameOf=p=>pickerPeople.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;
+    if(existing&&Array.isArray(existing.participantIds)&&Array.isArray(existing.names))existing.participantIds.forEach((pid,i)=>{const nm=existing.names[i];if(pid&&typeof nm==='string'&&nm.trim()&&!pickerPeople.some(p=>p.id===pid))pickerPeople.push({id:pid,name:nm,type:'guest',seed:'미정',points:0,adhoc:true});});
+    let active='member',selected=new Set(existing?.participantIds?.length?existing.participantIds:pickerPeople.filter(p=>existing?.names.includes(pickerNameOf(p))).map(p=>p.id));
     let methods=Array.isArray(existing?.schedule)?existing.schedule.map(x=>x.method||'random'):Array.from({length:Number(existing?.rounds)||4},()=>'random');
     const lateRounds=Object.assign(Object.create(null),existing?.lateRounds||{});
     const lateRegistration=new Set(Array.isArray(existing?.lateRegistration)?existing.lateRegistration:[]);
     const lateOpen=new Set(Object.keys(lateRounds).concat([...lateRegistration]));
     dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div><label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing?.title||'')+'" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다"></label><div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div id="roundMethods" class="round-methods"></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><div class="add-guest"><input id="newGuestName" maxlength="100" placeholder="새로 온 게스트 이름"><button type="button" id="addGuest">추가하기</button></div><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">라운드마다 매칭 방식을 고르면 시드 점수를 반영해 대진이 만들어집니다. 동일은 가까운 4명, 인접은 가까운 2명씩을 한 묶음 건너 조합해 팀 평균 점수를 맞춥니다. 랜덤은 점수 무관입니다. 늦참 2는 1·2R 제외 후 3R부터 참여합니다. 휴식은 신청늦음→게스트→운영진 각 1회, 이후 일반회원 중 덜 쉰 사람을 무작위로 배정합니다.</p><p id="pickerError" class="login-error" role="alert"></p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
-    const visible=()=>people.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
-    const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+people.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+people.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
-    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>{const name=nameOf(p),open=lateOpen.has(name),round=Number(lateRounds[name])||0,registered=lateRegistration.has(name);return '<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+nameHTML(name)+'</span><small>'+seedHTML(p.seed||'미정')+'</small><button type="button" class="late-btn'+(open?' on':'')+'" data-late-name="'+esc(name)+'" aria-expanded="'+open+'" aria-label="'+esc(name)+' 늦참 설정 '+(open?'접기':'펼치기')+'">늦참'+(round?' '+round+'R 제외':'')+(registered?' · 신청늦음':'')+'</button>'+(open?'<div class="late-options" role="group" aria-label="'+esc(name)+' 늦참 설정"><span>앞 라운드 제외</span>'+[1,2,3,4,5].map(n=>'<button type="button" class="late-round'+(round===n?' on':'')+'" data-late-round="'+n+'" data-late-name="'+esc(name)+'" aria-pressed="'+(round===n)+'" aria-label="'+esc(name)+' 앞 '+n+'라운드 제외">'+n+'</button>').join('')+'<button type="button" class="late-registration'+(registered?' on':'')+'" data-late-registration="'+esc(name)+'" aria-pressed="'+registered+'">신청늦음</button></div>':'')+'</label>';}).join('')||'<p>검색 결과가 없습니다.</p>';count();}
+    const visible=()=>pickerPeople.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
+    const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+pickerPeople.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+pickerPeople.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
+    function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>{const name=pickerNameOf(p),open=lateOpen.has(name),round=Number(lateRounds[name])||0,registered=lateRegistration.has(name);return '<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+nameHTML(name)+'</span><small>'+seedHTML(p.seed||'미정')+'</small><button type="button" class="late-btn'+(open?' on':'')+'" data-late-name="'+esc(name)+'" aria-expanded="'+open+'" aria-label="'+esc(name)+' 늦참 설정 '+(open?'접기':'펼치기')+'">늦참'+(round?' '+round+'R 제외':'')+(registered?' · 신청늦음':'')+'</button>'+(open?'<div class="late-options" role="group" aria-label="'+esc(name)+' 늦참 설정"><span>앞 라운드 제외</span>'+[1,2,3,4,5].map(n=>'<button type="button" class="late-round'+(round===n?' on':'')+'" data-late-round="'+n+'" data-late-name="'+esc(name)+'" aria-pressed="'+(round===n)+'" aria-label="'+esc(name)+' 앞 '+n+'라운드 제외">'+n+'</button>').join('')+'<button type="button" class="late-registration'+(registered?' on':'')+'" data-late-registration="'+esc(name)+'" aria-pressed="'+registered+'">신청늦음</button></div>':'')+'</label>';}).join('')||'<p>검색 결과가 없습니다.</p>';count();}
     const methodLabels=[['same','동일'],['balanced','인접'],['random','랜덤']];
     function renderMethods(){
       const n=Math.max(1,Math.min(20,Number($('rounds').value)||1));
@@ -313,14 +334,14 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     $('roundMethods').onclick=e=>{const b=e.target.closest('.rm-btn');if(!b)return;methods[+b.dataset.r]=b.dataset.v;renderMethods();};
     $('rounds').oninput=renderMethods;
     $('memberTab').onclick=()=>{active='member';render();};$('guestTab').onclick=()=>{active='guest';render();};$('searchPeople').oninput=render;$('selectAll').onclick=()=>{visible().forEach(p=>selected.add(p.id));render();};$('clearAll').onclick=()=>{selected.clear();render();};$('closePicker').onclick=()=>dialog.close();
-    $('addGuest').onclick=()=>{const inp=$('newGuestName'),name=inp.value.trim();if(!name)return alert('게스트 이름을 입력해주세요.');if(people.some(p=>p.name===name))return alert('같은 이름이 이미 목록에 있어요. 이름을 다르게 적어주세요.');const g={id:crypto.randomUUID(),name,type:'guest',seed:'미정',points:0,adhoc:true};people.push(g);selected.add(g.id);inp.value='';active='guest';$('searchPeople').value='';render();inp.focus();};
+    $('addGuest').onclick=()=>{const inp=$('newGuestName'),name=inp.value.trim();if(!name)return alert('게스트 이름을 입력해주세요.');if(pickerPeople.some(p=>p.name===name))return alert('같은 이름이 이미 목록에 있어요. 이름을 다르게 적어주세요.');const g={id:crypto.randomUUID(),name,type:'guest',seed:'미정',points:0,adhoc:true};pickerPeople.push(g);selected.add(g.id);inp.value='';active='guest';$('searchPeople').value='';render();inp.focus();};
     $('newGuestName').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('addGuest').click();}};
     $('generate').onclick=()=>{
-      const c=Number($('courts').value),r=Number($('rounds').value),picked=people.filter(p=>selected.has(p.id));
+      const c=Number($('courts').value),r=Number($('rounds').value),picked=pickerPeople.filter(p=>selected.has(p.id));
       if(picked.length<4)return alert('참가자 4명 이상을 선택해주세요.');
       if(!Number.isInteger(c)||c<1||c>20||!Number.isInteger(r)||r<1||r>20)return alert('코트와 라운드는 1~20 사이 정수로 입력해주세요.');
       if(existing&&!confirm('기존 대진 구성을 새로 만듭니다. 저장하기 전까지 게시된 대진은 그대로 유지됩니다. 계속할까요?'))return;
-      const roster=picked.map(p=>{const name=nameOf(p);return {id:p.id,name,type:p.type,points:Number(p.points)||0,operator:OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name)};});
+      const roster=picked.map(p=>{const name=pickerNameOf(p);return {id:p.id,name,type:p.type,points:Number(p.points)||0,operator:OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name)};});
       let schedule;try{schedule=scheduleTools.generate(roster,c,r,methods);}catch(error){$('pickerError').textContent=error.message||'대진을 만들지 못했어요. 늦참 설정과 참가 인원을 확인해주세요.';return;}
       const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title:$('newTitle').value.trim()||stamp(),names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
       dialog.close();editSchedule(d);dirty=true;window.scrollTo(0,0);
@@ -390,30 +411,37 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
       const kind=person.type==='member'?'회원':'게스트',oldPoints=Number(person.points)||20;
       dialog.innerHTML='<form id="personEditForm"><div class="dialog-head"><h2 id="pickerTitle">'+kind+' 정보 수정</h2><button type="button" id="closePersonEdit" aria-label="닫기">×</button></div><p class="edit-info">현재 이름과 점수만 수정합니다. 기존 대진표의 이름과 과거 정산 기록은 그대로 보존됩니다.</p><label>닉네임<input id="personEditName" maxlength="100" value="'+esc(person.name)+'" required></label><label>시드 점수<input id="personEditPoints" type="number" min="20" max="1000" value="'+oldPoints+'" required></label><label>수정 사유 <span class="muted">(필수)</span><textarea id="personEditReason" maxlength="300" placeholder="예: 최신 시드 관리표 반영" required></textarea></label><p id="personEditError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="personEditSubmit" class="primary">저장</button><button type="button" id="cancelPersonEdit">취소</button></div></form>';
       let working=false;
+      const form=$('personEditForm'),nameInput=$('personEditName'),pointsInput=$('personEditPoints'),reasonInput=$('personEditReason'),submit=$('personEditSubmit'),errorOutput=$('personEditError');
+      const active=()=>dialog.open&&dialog.querySelector('#personEditForm')===form;
       const close=()=>{if(!working)dialog.close();};$('closePersonEdit').onclick=close;$('cancelPersonEdit').onclick=close;
       dialog.oncancel=e=>{if(working)e.preventDefault();};
-      $('personEditForm').onsubmit=async e=>{e.preventDefault();if(working)return;const submit=$('personEditSubmit'),name=$('personEditName').value.trim(),points=Number($('personEditPoints').value),reason=$('personEditReason').value.trim();if(!name||!Number.isInteger(points)||points<20||points>1000||!reason){$('personEditError').textContent='이름·점수·수정 사유를 모두 확인해주세요.';return;}working=true;submit.disabled=true;submit.textContent='저장 중…';$('personEditError').textContent='';try{await api('/api/people/update',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({id:person.id,type:person.type,name,points,reason,expectedVersion:person.edit_version})});working=false;dialog.oncancel=null;dialog.close();message(name+' 정보를 수정했어요.');await refresh();}catch(error){$('personEditError').textContent=error.message;working=false;submit.disabled=false;submit.textContent='저장';}};
-      dialog.showModal();$('personEditName').focus();$('personEditName').select();
+      form.onsubmit=async e=>{e.preventDefault();if(working)return;const name=nameInput.value.trim(),points=Number(pointsInput.value),reason=reasonInput.value.trim();if(!name||!Number.isInteger(points)||points<20||points>1000||!reason){errorOutput.textContent='이름·점수·수정 사유를 모두 확인해주세요.';return;}working=true;submit.disabled=true;submit.textContent='저장 중…';errorOutput.textContent='';try{await api('/api/people/update',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({id:person.id,type:person.type,name,points,reason,expectedVersion:person.edit_version})});if(!active())return;working=false;dialog.oncancel=null;dialog.close();message(name+' 정보를 수정했어요.');await refresh();}catch(error){if(active()){errorOutput.textContent=error.message;working=false;submit.disabled=false;submit.textContent='저장';}}};
+      dialog.showModal();nameInput.focus();nameInput.select();
     }
     async function showHistory(person){
       const kind=person.type==='member'?'회원':'게스트';
       dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+esc(person.name)+' · 변경 이력</h2><button type="button" id="closePersonHistory" aria-label="닫기">×</button></div><p class="muted">운영진만 볼 수 있는 기록입니다.</p><div id="personHistoryBody"><p>불러오는 중…</p></div><div class="sticky-actions"><button type="button" id="cancelPersonHistory">닫기</button></div>';
+      const historyBody=$('personHistoryBody');
+      const active=()=>dialog.open&&dialog.querySelector('#personHistoryBody')===historyBody;
       $('closePersonHistory').onclick=()=>dialog.close();$('cancelPersonHistory').onclick=()=>dialog.close();dialog.showModal();
-      try{const {items}=await api('/api/people/history?type='+encodeURIComponent(person.type)+'&id='+encodeURIComponent(person.id),{headers:{'x-kokkiri-editor':EDITOR}});if(!dialog.open)return;const actionName={create:'추가',update:'수정',hide:'숨김',promote:'회원 이관'};const body=items.length?'<ul class="history-list">'+items.map(h=>{const names=h.before_name&&h.after_name&&h.before_name!==h.after_name?esc(h.before_name)+' → '+esc(h.after_name):esc(h.after_name||h.before_name||'-');const pts=h.before_points!=null&&h.after_points!=null&&h.before_points!==h.after_points?' · '+h.before_points+'점 → '+h.after_points+'점':'';return '<li><span class="history-meta">'+esc(date(h.created_at))+' · '+esc(actionName[h.action]||h.action)+'</span><span>'+names+pts+'</span><span class="history-reason">사유: '+esc(h.reason)+'</span></li>';}).join('')+'</ul>':'<p class="muted">아직 기록이 없습니다.</p>';$('personHistoryBody').innerHTML=body;}catch(error){if(dialog.open)$('personHistoryBody').innerHTML='<p class="login-error" role="alert">'+esc(error.message)+'</p>';}
+      try{const {items}=await api('/api/people/history?type='+encodeURIComponent(person.type)+'&id='+encodeURIComponent(person.id),{headers:{'x-kokkiri-editor':EDITOR}});if(!active())return;const actionName={create:'추가',update:'수정',hide:'숨김',promote:'회원 이관'};const body=items.length?'<ul class="history-list">'+items.map(h=>{const names=h.before_name&&h.after_name&&h.before_name!==h.after_name?esc(h.before_name)+' → '+esc(h.after_name):esc(h.after_name||h.before_name||'-');const pts=h.before_points!=null&&h.after_points!=null&&h.before_points!==h.after_points?' · '+h.before_points+'점 → '+h.after_points+'점':'';return '<li><span class="history-meta">'+esc(date(h.created_at))+' · '+esc(actionName[h.action]||h.action)+'</span><span>'+names+pts+'</span><span class="history-reason">사유: '+esc(h.reason)+'</span></li>';}).join('')+'</ul>':'<p class="muted">아직 기록이 없습니다.</p>';historyBody.innerHTML=body;}catch(error){if(active())historyBody.innerHTML='<p class="login-error" role="alert">'+esc(error.message)+'</p>';}
     }
     function addPerson(){
       dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">사람 추가</h2><button id="closeAdd" aria-label="닫기">×</button></div><label>닉네임<input id="addName" maxlength="100" placeholder="닉네임"></label><label>시드 점수<input id="addPoints" type="number" min="20" max="1000" placeholder="예: 90"></label><div class="tabs"><button type="button" id="addTypeM" aria-pressed="true">회원</button><button type="button" id="addTypeG" aria-pressed="false">게스트</button></div><button id="addConfirm" class="primary">확인</button>';
-      let atype='member';
+      let atype='member',working=false;
+      const nameInput=$('addName'),pointsInput=$('addPoints'),submit=$('addConfirm');
+      const active=()=>dialog.open&&dialog.querySelector('#addConfirm')===submit;
       const setType=t=>{atype=t;$('addTypeM').setAttribute('aria-pressed',String(t==='member'));$('addTypeG').setAttribute('aria-pressed',String(t==='guest'));};
-      $('addTypeM').onclick=()=>setType('member');$('addTypeG').onclick=()=>setType('guest');$('closeAdd').onclick=()=>dialog.close();
-      $('addConfirm').onclick=async()=>{const name=$('addName').value.trim(),points=Number($('addPoints').value);if(!name)return alert('닉네임을 입력해주세요.');if(!Number.isInteger(points)||points<20||points>1000)return alert('시드 점수는 20~1000 사이 숫자로 입력해주세요.');try{await api('/api/people',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({name,type:atype,points})});dialog.close();type=atype;message(name+' 추가했어요.');await refresh();}catch(e){message(e.message,true);}};
+      const close=()=>{if(!working)dialog.close();};
+      $('addTypeM').onclick=()=>setType('member');$('addTypeG').onclick=()=>setType('guest');$('closeAdd').onclick=close;dialog.oncancel=e=>{if(working)e.preventDefault();};
+      submit.onclick=async()=>{if(working)return;const name=nameInput.value.trim(),points=Number(pointsInput.value);if(!name)return alert('닉네임을 입력해주세요.');if(!Number.isInteger(points)||points<20||points>1000)return alert('시드 점수는 20~1000 사이 숫자로 입력해주세요.');working=true;submit.disabled=true;submit.textContent='추가 중…';try{await api('/api/people',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({name,type:atype,points})});if(!active())return;working=false;dialog.oncancel=null;dialog.close();type=atype;message(name+' 추가했어요.');await refresh();}catch(e){if(active()){message(e.message,true);working=false;submit.disabled=false;submit.textContent='확인';}}};
       dialog.showModal();
     }
     paint();
   }
   async function route(){
     const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;stopPoll();app.innerHTML='<p class="empty">불러오는 중…</p>';
-    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/'))await detail(hash.slice(6),token);else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
+    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
   window.addEventListener('hashchange',()=>{if(saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);});
   document.addEventListener('click',e=>{const a=e.target.closest('a');if(a&&draft&&a.getAttribute('href')===(location.hash||'#home')){e.preventDefault();if(saving)return;if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?'))return;dirty=false;route();}});
