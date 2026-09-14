@@ -112,12 +112,11 @@ export async function runRankingProtectionChecks(){
     const promotedUndone=byName(await rankings(),guest.name);
     assert.equal(promotedUndone.points,20);assert.equal(promotedUndone.wins,0);assert.equal(promotedUndone.losses,0);assert.equal(promotedUndone.attendance,0);assert.equal(promotedUndone.rank_protected,0);
     await settle(id);
-    const orderBeforeReset=(await rankings()).map(r=>r.member_id);
+    const weeklyBeforeDraft=await rankings();
     await data('/api/posts/next-protection-regression','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:{...schedule,results:{}}});
-    const reset=await rankings();
-    assert.ok(reset.every(r=>r.rank_movement===0&&r.rank_protected===0&&r.attendance===0));
-    assert.deepEqual(reset.map(r=>r.member_id),orderBeforeReset,'새 정모 시작은 표시만 초기화, 보호 후 순서 유지');
-    assert.ok(reset.every(r=>r.points>=20));
-    console.log('PASS: ranking arrows survive promotion/add/remove; scored participants only; minimum 20, protected tie order, exact undo, migration recovery and weekly reset.');
+    const afterDraft=await rankings();
+    assert.deepEqual(afterDraft,weeklyBeforeDraft,'새 정모 초안은 최신 확정 주간 표시를 초기화하지 않음');
+    assert.ok(afterDraft.every(r=>r.points>=20));
+    console.log('PASS: ranking arrows survive promotion/add/remove; scored participants only; minimum 20, protected tie order, exact undo, migration recovery and draft-preserved weekly display.');
   }finally{sqlite.close();}
 }

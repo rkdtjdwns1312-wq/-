@@ -7,6 +7,7 @@ import { client } from './dist/server/boards-client.js';
 import { adminKeyFor } from './dist/server/admin-login.js';
 import { runRankingProtectionChecks } from './check-ranking-protection.mjs';
 import { runScheduleChecks } from './check-schedule.mjs';
+import { runWeeklyResultsChecks } from './check-weekly-results.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12','0008_points_movement_and_legacy_cleanup','0009_guest_scoring','0010_admin_operators_backups','0011_rank_movement_and_score_floor','0012_db_people_catalog_and_edit_history'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
@@ -84,11 +85,10 @@ const putW2=(version,data)=>worker.fetch(new Request(origin+'/api/posts/wave2-te
 const postResult=body=>worker.fetch(new Request(origin+'/api/posts/wave2-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),env);
 const getW2=async()=>(await (await worker.fetch(new Request(origin+'/api/posts/wave2-test'),env)).json()).data;
 assert.equal((await putW2(0,wave2)).status,200);
-// 요청 047: 새 대진 생성 시 출석/승/패는 0으로 초기화되고 점수는 누적 유지된다
+// 요청 047·091: 새 대진 초안 생성은 최신 확정 주간 표시를 초기화하지 않는다
 const afterCreate=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,sioAC=afterCreate.find(r=>r.name==='시오');
-assert.equal(sioAC.attendance,0);assert.equal(sioAC.wins,0);assert.equal(sioAC.losses,0);assert.equal(sioAC.points,101);
-// 요청 066: 새 대진 시작 시 점수 변동 표시(previous_points)와 순위 변동(previous_rank)도 초기화되어 화살표가 사라진다
-assert.equal(sioAC.previous_points,sioAC.points);assert.equal(sioAC.previous_rank,sioAC.rank);
+assert.equal(sioAC.attendance,1);assert.equal(sioAC.wins,1);assert.equal(sioAC.losses,0);assert.equal(sioAC.points,101);
+assert.equal(sioAC.previous_points,99);assert.equal(sioAC.points-sioAC.previous_points,2);
 const w2got=await getW2();assert.equal(w2got.schedule[0].method,'balanced');assert.equal(w2got.schedule[1].method,'random');
 assert.equal((await postResult({key:'1-0',winner:'a'})).status,400);
 assert.equal((await postResult({key:'0-0',winner:'x'})).status,400);
@@ -136,7 +136,7 @@ assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/se
 const uSet=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uSet.points,uPre+2);assert.equal(uSet.attendance,1);assert.equal(uSet.wins,1);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/unsettle',{method:'POST'}),env)).status,403);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test/unsettle',{method:'POST',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
-const uRev=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uRev.points,uPre);assert.equal(uRev.attendance,0);assert.equal(uRev.wins,0);
+const uRev=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오');assert.equal(uRev.points,uPre);assert.equal(uRev.attendance,1);assert.equal(uRev.wins,1);assert.equal(uRev.losses,0);
 assert.equal((await (await worker.fetch(new Request(origin+'/api/posts/unsettle-test'),env)).json()).data.settledAt,null);
 // 요청 062: 코트 추가(라운드 내 경기 수 가변·중복 배치) — 시오·구구·구름·백구가 한 라운드에 두 경기
 const putV=(id,v,d)=>worker.fetch(new Request(origin+'/api/posts/'+id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:v,operation:crypto.randomUUID(),data:d})}),env);
@@ -211,10 +211,14 @@ const bkList=(await (await worker.fetch(new Request(origin+'/api/backups',{heade
 assert.ok(bkList.some(b=>b.id===bkId));
 const bkDl=await worker.fetch(new Request(origin+'/api/backups/'+bkId,{headers:{'x-kokkiri-admin':adminKey}}),env);
 assert.equal(bkDl.status,200);const bkData=JSON.parse(await bkDl.text());assert.ok(Array.isArray(bkData.posts)&&Array.isArray(bkData.members)&&Array.isArray(bkData.guests));
+assert.ok(Array.isArray(bkData.settlements)&&bkData.settlements.some(row=>row.schedule_id==='guest-score'),'백업에 최신 정산 원본이 포함되어야 합니다');
+assert.ok(Array.isArray(bkData.rankingEvents)&&bkData.rankingEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 회원 정산 이벤트가 포함되어야 합니다');
+assert.ok(Array.isArray(bkData.guestEvents)&&bkData.guestEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 게스트 정산 이벤트가 포함되어야 합니다');
 await worker.scheduled({cron:'0 0 * * 0'},env,{waitUntil(){}});
 assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:{'x-kokkiri-admin':adminKey}}),env)).json()).items.length>=2);
 await runRankingProtectionChecks();
 await runScheduleChecks({worker,env,origin});
+await runWeeklyResultsChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';

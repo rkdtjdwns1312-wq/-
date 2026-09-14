@@ -5,6 +5,7 @@ import { createScheduleTools } from './schedule-tools.js';
 import { operatorLogin } from './operator-login.js';
 import { adminLogin, adminKeyFor } from './admin-login.js';
 import { orderRankingRows, seedForPoints } from './rankings.js';
+import { readWeeklyResults } from './weekly-results.js';
 
 // 명단 변경은 현재 순위만 다시 매긴다. 정모 증감·보호 표시와 이전 순위는 보존한다.
 async function reorderMembers(db){
@@ -16,7 +17,7 @@ function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
   const rawPoints=row.points+d.points,points=Math.max(20,rawPoints);
   const protectedNow=Boolean(delta&&d.wins+d.losses>0&&rawPoints<=20);
-  return {...row,points,attendance:row.attendance+d.attendance,wins:row.wins+d.wins,losses:row.losses+d.losses,
+  return {...row,points,attendance:d.attendance,wins:d.wins,losses:d.losses,
     rank_protected:protectedNow?1:0,
     floor_protected_at:points>20?null:protectedNow?at:row.floor_protected_at};
 }
@@ -126,7 +127,7 @@ async function settleSchedule(db,id,input){
     statements.push(db.prepare('UPDATE ranking_members SET points=?,seed=?,rank=?,previous_rank=?,previous_points=?,attendance=?,wins=?,losses=?,updated_at=?,rank_movement=?,rank_protected=?,floor_protected_at=? WHERE member_id=?').bind(next.points,seedForPoints(next.points),next.rank,before.rank,before.points,next.attendance,next.wins,next.losses,at,movement,next.rank_protected,next.floor_protected_at,next.member_id));
   }
   for(const [memberId,delta] of deltas){const before=byId.get(memberId),after=nextRows.find(row=>row.member_id===memberId);statements.push(db.prepare('INSERT INTO ranking_events (schedule_id,member_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,rank_before,rank_after,seed_before,seed_after,created_at,floor_protected_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,memberId,delta.attendance,delta.wins,delta.losses,after.points-before.points,before.points,after.points,before.rank,after.rank,before.seed,after.seed,at,before.floor_protected_at));}
-  statements.push(db.prepare('UPDATE guests SET rank_protected=0 WHERE hidden=0'));
+  statements.push(db.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0'));
   for(const g of gNext){if(!gDeltas.has(g.guest_id))continue;statements.push(db.prepare('UPDATE guests SET points=?,previous_points=?,attendance=?,wins=?,losses=?,rank_protected=?,floor_protected_at=? WHERE guest_id=?').bind(g.points,gById.get(g.guest_id).points,g.attendance,g.wins,g.losses,g.rank_protected,g.floor_protected_at,g.guest_id));}
   for(const [gid,d] of gDeltas){const before=gById.get(gid),after=gNext.find(g=>g.guest_id===gid);statements.push(db.prepare('INSERT INTO guest_events (schedule_id,guest_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,created_at,floor_protected_before) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id,gid,d.attendance,d.wins,d.losses,after.points-before.points,before.points,after.points,at,before.floor_protected_at));}
   await db.batch(statements);
@@ -177,9 +178,13 @@ async function createBackup(env,kind){
   const posts=(await env.DB.prepare('SELECT id,kind,payload,version,last_operation,created_at,updated_at FROM board_posts ORDER BY created_at').all()).results;
   const members=(await env.DB.prepare('SELECT * FROM ranking_members').all()).results;
   const guests=(await env.DB.prepare('SELECT * FROM guests').all()).results;
+  const settlements=(await env.DB.prepare('SELECT * FROM ranking_settlements').all()).results;
+  const rankingEvents=(await env.DB.prepare('SELECT * FROM ranking_events').all()).results;
+  const guestEvents=(await env.DB.prepare('SELECT * FROM guest_events').all()).results;
+  const peopleChanges=(await env.DB.prepare('SELECT * FROM people_changes').all()).results;
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests});
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges});
   const id='bk-'+at.replace(/[:.]/g,'-')+'-'+Math.random().toString(36).slice(2,6);
   await env.DB.prepare('INSERT INTO backups (id,created_at,kind,data) VALUES (?,?,?,?)').bind(id,at,kind,data).run();
   await env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(new Date(Date.now()-31*86400000).toISOString()).run();
@@ -198,19 +203,20 @@ export default {async fetch(request,env){
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({error:'Storage unavailable'},503);
+    const weekly=await readWeeklyResults(env.DB);
     const members=(await env.DB.prepare('SELECT member_id,name,seed,points,is_operator,edit_version FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results.map(r=>({id:r.member_id,name:r.name,type:'member',seed:seedForPoints(r.points),points:r.points,is_operator:r.is_operator,edit_version:r.edit_version}));
-    const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses,rank_protected,floor_protected_at,edit_version FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses,rank_protected:r.rank_protected,floor_protected_at:r.floor_protected_at,edit_version:r.edit_version}));
-    return json({people:[...members,...guests]});
+    const guests=(await env.DB.prepare('SELECT guest_id,name,points,previous_points,attendance,wins,losses,rank_protected,floor_protected_at,edit_version FROM guests WHERE hidden=0 ORDER BY points DESC').all()).results.map(r=>weekly.guest(r)).map(r=>({id:r.guest_id,name:r.name,type:'guest',seed:seedForPoints(r.points),points:r.points,previous_points:r.previous_points,attendance:r.attendance,wins:r.wins,losses:r.losses,rank_protected:r.rank_protected,floor_protected_at:r.floor_protected_at,edit_version:r.edit_version}));
+    return json({people:[...members,...guests],displaySettlementId:weekly.scheduleId});
   }
   if(path.startsWith('/api/')){
     try{
       if(!env.DB)throw Error('Storage unavailable');
       if(path==='/api/rankings'&&request.method==='GET'){
-        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at,edit_version FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
+        const weekly=await readWeeklyResults(env.DB);
+        const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at,edit_version,promoted_guest_id FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
         const sourceDate='2026-09-10';
-        const lastSettle=await env.DB.prepare('SELECT MAX(settled_at) AS m FROM ranking_settlements').first();
-        const updatedDate=lastSettle&&lastSettle.m?new Date(lastSettle.m).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
-        return json({items:results,source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate});
+        const updatedDate=weekly.settledAt?new Date(weekly.settledAt).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
+        return json({items:results.map(r=>weekly.member(r)),source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate,displaySettlementId:weekly.scheduleId});
       }
       if(path==='/api/people'&&request.method==='POST'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 추가할 수 있습니다.'},403);
@@ -436,8 +442,7 @@ export default {async fetch(request,env){
       const result=input.version===0
         ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(id,input.kind,JSON.stringify(payload),input.operation,at,at).run()
         :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?').bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version).run();
-      // 요청 047: 새 대진(정모)을 만들 때 출석·승·패를 0으로 초기화한다. 점수·시드·순위는 누적 유지.
-      if(input.version===0&&input.kind==='schedule'&&result.meta.changes){await env.DB.batch([env.DB.prepare('UPDATE ranking_members SET attendance=0,wins=0,losses=0,previous_rank=rank,previous_points=points,rank_movement=0,rank_protected=0,updated_at=?').bind(at),env.DB.prepare('UPDATE guests SET attendance=0,wins=0,losses=0,previous_points=points,rank_protected=0 WHERE hidden=0')]);}
+      // Draft creation/editing never clears the latest confirmed weekly results.
       const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
       if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);
