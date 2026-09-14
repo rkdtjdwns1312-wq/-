@@ -6,6 +6,7 @@ import worker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 import { adminKeyFor } from './dist/server/admin-login.js';
 import { runRankingProtectionChecks } from './check-ranking-protection.mjs';
+import { runScheduleChecks } from './check-schedule.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of ['0000_initial_schedule','0001_boards','0002_operator_login_limits','0003_rankings','0004_seed_posts_from_codex_site','0005_clean_member_names','0006_people_manage','0007_jeongmo_2026_09_12','0008_points_movement_and_legacy_cleanup','0009_guest_scoring','0010_admin_operators_backups','0011_rank_movement_and_score_floor'])db.exec(readFileSync(new URL('./drizzle/'+name+'.sql',import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};}};},async batch(statements){return Promise.all(statements.map(statement=>statement.run()));}};
@@ -204,6 +205,7 @@ assert.equal(bkDl.status,200);const bkData=JSON.parse(await bkDl.text());assert.
 await worker.scheduled({cron:'0 0 * * 0'},env,{waitUntil(){}});
 assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:{'x-kokkiri-admin':adminKey}}),env)).json()).items.length>=2);
 await runRankingProtectionChecks();
+await runScheduleChecks({worker,env,origin});
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';

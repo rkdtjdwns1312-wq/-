@@ -2,6 +2,7 @@ import people from './roster.js';
 import images from './images.js';
 import { client } from './boards-client.js';
 import { css } from './boards-style.js';
+import { createScheduleTools } from './schedule-tools.js';
 import { operatorLogin } from './operator-login.js';
 import { adminLogin, adminKeyFor } from './admin-login.js';
 import { ensureRankingMembers, orderRankingRows, rankingOnlyPeople, seedForPoints } from './rankings.js';
@@ -36,6 +37,7 @@ const defaultTitle=()=>new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',
 // 옛 단일 대진표(schedules id=1)는 마이그레이션 0004에서 board_posts로 1회 이관했다.
 // 예전에는 조회 때마다 되살렸으나(preserveLegacy) 그 때문에 삭제해도 다시 생겨 제거했다(요청 065).
 const validResult=value=>value==='a'||value==='b';
+const scheduleTools=createScheduleTools();
 function cleanResults(value,schedule){
   const results={};
   if(!value||typeof value!=='object'||Array.isArray(value))return results;
@@ -56,14 +58,21 @@ function validate(d,kind){
   }
   if(!Array.isArray(d.names)||d.names.length<4||d.names.length>200||d.names.some(n=>typeof n!=='string'||!n.trim()||n.length>100)||new Set(d.names).size!==d.names.length)throw Error('참가자 명단을 확인해주세요.');
   if(!Number.isInteger(d.courts)||d.courts<1||d.courts>20||!Number.isInteger(d.rounds)||d.rounds<1||d.rounds>20||!Array.isArray(d.schedule)||d.schedule.length!==d.rounds)throw Error('코트와 라운드 수를 확인해주세요.');
+  if(d.lateRounds!=null&&(typeof d.lateRounds!=='object'||Array.isArray(d.lateRounds)))throw Error('늦참 라운드를 확인해주세요.');
+  const lateEntries=Object.entries(d.lateRounds||{}).filter(([name])=>d.names.includes(name));
+  if(lateEntries.some(([,n])=>!Number.isInteger(n)||n<0||n>5))throw Error('늦참은 0~5라운드 사이로 지정해주세요.');
+  const lateRounds=Object.fromEntries(lateEntries.filter(([,n])=>n>0));
+  const lateRegistration=Array.isArray(d.lateRegistration)?[...new Set(d.lateRegistration.filter(n=>typeof n==='string'&&d.names.includes(n)))]:[];
   const schedule=d.schedule.map((r,i)=>{
-    if(!Array.isArray(r.g)||r.g.length<1||r.g.length>100||r.g.some(m=>!Array.isArray(m)||m.length!==4||new Set(m).size!==4))throw Error('대진 구성을 확인해주세요.');
+    const available=scheduleTools.availableNames({names:d.names,lateRounds},i);
+    if(!Array.isArray(r.g)||(r.g.length===0&&available.length>=4)||r.g.length>100||r.g.some(m=>!Array.isArray(m)||m.length!==4||new Set(m).size!==4))throw Error('대진 구성을 확인해주세요.');
     const playing=r.g.flat();
     if(playing.some(n=>!d.names.includes(n)))throw Error('대진에 명단에 없는 참가자가 있습니다.');
+    if(playing.some(n=>!available.includes(n)))throw Error((i+1)+'라운드에 아직 도착하지 않은 참가자가 있습니다.');
     const method=['same','balanced','random'].includes(r.method)?r.method:'balanced';
-    return {round:i+1,method,g:r.g,rest:d.names.filter(n=>!playing.includes(n))};
+    return {round:i+1,method,g:r.g,rest:available.filter(n=>!playing.includes(n)),late:d.names.filter(n=>!available.includes(n))};
   });
-  const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,results:cleanResults(d.results,schedule),settledAt:null};
+  const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,lateRounds,lateRegistration,results:cleanResults(d.results,schedule),settledAt:null};
   if(Array.isArray(d.mvp))base.mvp=d.mvp.filter(x=>typeof x==='string').slice(0,50);
   if(Array.isArray(d.absent))base.absent=d.absent.filter(x=>typeof x==='string'&&d.names.includes(x)).slice(0,200);
   return base;
@@ -95,7 +104,7 @@ async function settleSchedule(db,id,input){
   const resolve=(name,index)=>{const pid=Array.isArray(post.participantIds)?post.participantIds[index]:'';if(byId.has(pid))return{t:'m',id:pid};if(gById.has(pid))return{t:'g',id:pid};if(byName.has(name))return{t:'m',id:byName.get(name)};if(gByName.has(name))return{t:'g',id:gByName.get(name)};return null;};
   const whoByName=new Map(post.names.map((name,index)=>[name,resolve(name,index)]));
   const addFor=(name,field)=>{const w=whoByName.get(name);if(!w)return;bump(w.t==='m'?deltas:gDeltas,w.id,field);};
-  const attended=new Set();for(const name of post.names){if(absentSet.has(name))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
+  const attended=new Set();for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
   const scoredPlayed=new Map(),scoredLost=new Set();
   for(let ri=0;ri<post.schedule.length;ri++){
     if(!isScored(ri))continue;
@@ -187,7 +196,7 @@ async function createBackup(env,kind){
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}</style></head><body><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header><main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
