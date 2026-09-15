@@ -33,6 +33,13 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   assert.equal((await act('open',{},true)).version,d.version,'repeating the same open is idempotent');
   assert.deepEqual(d.courts[0],{names:['','','',''],state:'waiting'});
   assert.equal((await call({action:'end',version:d.version,court:0})).status,409);
+  d=await act('join',{court:0,names:['한명','두명','세명','네명']});assert.deepEqual(d.courts[0].names,['한명','두명','세명','네명'],'up to four names join atomically');
+  const beforeBatchDuplicate=await read(true),batchDuplicate=await call({version:d.version,action:'join',court:1,names:['중복','중복']});
+  assert.equal(batchDuplicate.status,409);assert.deepEqual(await read(true),beforeBatchDuplicate,'duplicate names in one batch never partially save');
+  d=await act('end',{court:0});assert.ok(d.courts[0].names.every(name=>name===''));
+  d=await act('join',{court:0,names:['첫칸','둘째칸','셋째칸']});d=await act('leave',{court:0,slot:1});
+  d=await act('join',{court:0,slot:1,names:['다시채움']});assert.deepEqual(d.courts[0].names,['첫칸','다시채움','셋째칸','']);
+  d=await act('cancel',{court:0});assert.ok(d.courts[0].names.every(name=>name===''),'waiting court cancellation clears the whole game');
   for(const values of [{court:-1,name:'가'},{court:0,name:''},{court:0,name:'가\n나'},{court:0,name:'가'.repeat(41)}])assert.equal((await call({version:d.version,action:'join',...values})).status,400);
   assert.equal((await call({version:d.version,action:'join',court:'queue',name:'먼저 대기'})).status,409);
   d=await act('join',{court:0,name:'  자유 참가  '});assert.equal(d.courts[0].names[0],'자유 참가');
@@ -49,7 +56,9 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   await rejectCourtDuplicate('queue','자유 참가');
   assert.equal((await call({version:d.version,action:'leave',court:0,slot:0})).status,409);
   for(let i=0;i<4;i++)await act('join',{court:1,name:'두번째'+i});
-  for(let i=0;i<9;i++)await act('join',{court:'queue',name:'대기'+i});
+  await act('join',{court:'queue',names:['대기0','대기1','대기2','대기3']});
+  await act('join',{court:'queue',names:['대기4','대기5','대기6','대기7']});
+  await act('join',{court:'queue',names:['대기8']});
   d=await read();assert.equal(d.queue.length,3);assert.deepEqual(d.queue[0].names,['대기0','대기1','대기2','대기3']);
   assert.deepEqual(d.queue[2].names,['대기8','','','']);
   const retained=JSON.stringify({courts:d.courts,queue:d.queue}),openVersion=d.version;
@@ -62,7 +71,9 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   d=await act('open',{},true);assert.equal(JSON.stringify({courts:d.courts,queue:d.queue}),retained);
   const queueDuplicate=await call({version:d.version,action:'join',court:'queue',name:'대기0'});
   assert.equal(queueDuplicate.status,409);assert.equal((await queueDuplicate.json()).error,'이미 다음 대진에 등록된 이름입니다.');
-  await act('leave',{court:'queue',group:2,slot:0});d=await read();assert.equal(d.queue.length,2);
+  d=await act('leave',{court:'queue',group:1,slot:2});assert.equal(d.queue[1].names[2],'');
+  d=await act('join',{court:'queue',group:1,slot:2,names:['대기6']});assert.equal(d.queue[1].names[2],'대기6','the plus action refills the exact queue slot');
+  await act('cancel',{court:'queue',group:2});d=await read();assert.equal(d.queue.length,2,'waiting game cancellation removes the whole queue group');
   d=await act('end',{court:0});assert.deepEqual(d.courts[0].names,['대기0','대기1','대기2','대기3']);assert.equal(d.queue.length,1);
   assert.equal(d.courts[0].state,'playing');
   assert.ok(!('winner' in d.courts[0]),'free play must not store winners');

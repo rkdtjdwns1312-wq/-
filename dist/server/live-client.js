@@ -1,8 +1,8 @@
 // This factory is serialized into the browser. Keep it self-contained.
 export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
-  let timer=null,activeToken=0,model={version:0,isOpen:false,courts:[],queue:[]},editing=false,saving=false,joinDialog=null,toggleDialog=null,noticeDialog=null;
+  let timer=null,activeToken=0,model={version:0,isOpen:false,courts:[],queue:[]},editing=false,saving=false,joinDialog=null,toggleDialog=null,cancelDialog=null,noticeDialog=null;
   const current=token=>token===activeToken&&isCurrent(token);
-  const stop=()=>{if(timer){clearInterval(timer);timer=null;}if(joinDialog){joinDialog.remove();joinDialog=null;}if(toggleDialog){toggleDialog.remove();toggleDialog=null;}if(noticeDialog){noticeDialog.remove();noticeDialog=null;}editing=false;};
+  const stop=()=>{if(timer){clearInterval(timer);timer=null;}if(joinDialog){joinDialog.remove();joinDialog=null;}if(toggleDialog){toggleDialog.remove();toggleDialog=null;}if(cancelDialog){cancelDialog.remove();cancelDialog=null;}if(noticeDialog){noticeDialog.remove();noticeDialog=null;}editing=false;};
   const courtLabel=index=>(index+1)+'번 코트';
   const namesOf=item=>Array.isArray(item?.names)?item.names.map(name=>String(name||'').trim()).slice(0,4):['','','',''];
   const countNames=item=>namesOf(item).filter(Boolean).length;
@@ -10,14 +10,15 @@ export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
   const queue=()=>Array.isArray(model.queue)?model.queue:[];
   const versionOf=data=>Number.isInteger(data?.version)&&data.version>=0?data.version:0;
   function leaveButton(attrs,label){return '<button type="button" class="live-leave" '+attrs+' aria-label="'+esc(label)+'" title="참가 취소">×</button>';}
+  function addButton(attrs,label){return '<button type="button" class="live-add" '+attrs+' aria-label="'+esc(label)+'" title="빈자리 채우기">+</button>';}
   function courtSlot(court,courtIndex,slot){
     const name=namesOf(court)[slot],partial=Boolean(model.isOpen)&&!full(court)&&court.state==='waiting';
-    return '<div class="live-player'+(name?' has-name':'')+'"><span aria-label="'+courtLabel(courtIndex)+' '+(slot+1)+'번 참가자 '+(name?esc(name):'비어 있음')+'">'+(name?esc(name):'&nbsp;')+'</span>'+(name&&partial?leaveButton('data-live-leave-court="'+courtIndex+'" data-live-leave-slot="'+slot+'"',name+' 참가를 취소할까요?'):'')+'</div>';
+    return '<div class="live-player'+(name?' has-name':'')+'"><span aria-label="'+courtLabel(courtIndex)+' '+(slot+1)+'번 참가자 '+(name?esc(name):'비어 있음')+'">'+(name?esc(name):'빈자리')+'</span>'+(partial?(name?leaveButton('data-live-leave-court="'+courtIndex+'" data-live-leave-slot="'+slot+'"',name+' 참가를 취소할까요?'):addButton('data-live-add-court="'+courtIndex+'" data-live-add-slot="'+slot+'"',courtLabel(courtIndex)+' 빈자리 채우기')):'')+'</div>';
   }
-  function courtHTML(court,index){return '<section class="live-court'+(full(court)?' is-full':'')+'"><span class="live-court-name">'+courtLabel(index)+'</span><div class="live-players">'+[0,1,2,3].map(slot=>courtSlot(court,index,slot)).join('')+'</div>'+(model.isOpen&&full(court)?'<button type="button" class="primary live-end" data-live-end="'+index+'" aria-label="'+courtLabel(index)+' 대진 종료">대진 종료</button>':'')+'</section>';}
+  function courtHTML(court,index){const waiting=model.isOpen&&court.state==='waiting'&&countNames(court)>0;return '<section class="live-court'+(full(court)?' is-full':'')+'"><div class="live-court-top"><span class="live-court-name">'+courtLabel(index)+'</span>'+(waiting?'<button type="button" class="live-cancel" data-live-cancel-court="'+index+'">대기 취소</button>':'')+'</div><div class="live-players">'+[0,1,2,3].map(slot=>courtSlot(court,index,slot)).join('')+'</div>'+(model.isOpen&&full(court)?'<button type="button" class="primary live-end" data-live-end="'+index+'" aria-label="'+courtLabel(index)+' 대진 종료">대진 종료</button>':'')+'</section>';}
   function queueHTML(){
     const groups=queue();if(!groups.length)return'';
-    return '<section class="live-queue"><h2>대기중인 다음 대진</h2><div class="live-queue-list">'+groups.map((group,groupIndex)=>'<article class="live-queue-card"><h3>대기중인 대진 '+(groupIndex+1)+'</h3><div class="live-queue-names">'+[0,1,2,3].map(slot=>{const name=namesOf(group)[slot];return '<span class="live-queue-name'+(name?' has-name':'')+'"><span class="live-queue-text" title="'+esc(name||'빈자리')+'">'+(name?esc(name):'-')+'</span>'+(name&&model.isOpen?leaveButton('data-live-leave-queue="'+groupIndex+'" data-live-leave-slot="'+slot+'"',name+' 참가를 취소할까요?'):'')+'</span>';}).join('')+'</div></article>').join('')+'</div></section>';
+    return '<section class="live-queue"><h2>대기중인 다음 대진</h2><div class="live-queue-list">'+groups.map((group,groupIndex)=>'<article class="live-queue-card"><div class="live-queue-top"><h3>대기중인 대진 '+(groupIndex+1)+'</h3>'+(model.isOpen?'<button type="button" class="live-cancel" data-live-cancel-queue="'+groupIndex+'">대기 취소</button>':'')+'</div><div class="live-queue-names">'+[0,1,2,3].map(slot=>{const name=namesOf(group)[slot];return '<span class="live-queue-name'+(name?' has-name':'')+'"><span class="live-queue-text" title="'+esc(name||'빈자리')+'">'+(name?esc(name):'빈자리')+'</span>'+(model.isOpen?(name?leaveButton('data-live-leave-queue="'+groupIndex+'" data-live-leave-slot="'+slot+'"',name+' 참가를 취소할까요?'):addButton('data-live-add-queue="'+groupIndex+'" data-live-add-slot="'+slot+'"','대기중인 대진 '+(groupIndex+1)+' 빈자리 채우기')):'')+'</span>';}).join('')+'</div></article>').join('')+'</div></section>';
   }
   function render(token){
     if(!current(token))return;
@@ -29,6 +30,10 @@ export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
     app.querySelectorAll('[data-live-end]').forEach(button=>button.onclick=()=>runAction('end',{court:+button.dataset.liveEnd},token));
     app.querySelectorAll('[data-live-leave-court]').forEach(button=>button.onclick=()=>leave({court:+button.dataset.liveLeaveCourt,slot:+button.dataset.liveLeaveSlot},token));
     app.querySelectorAll('[data-live-leave-queue]').forEach(button=>button.onclick=()=>leave({court:'queue',group:+button.dataset.liveLeaveQueue,slot:+button.dataset.liveLeaveSlot},token));
+    app.querySelectorAll('[data-live-add-court]').forEach(button=>button.onclick=()=>openJoinDialog(token,{court:+button.dataset.liveAddCourt,slot:+button.dataset.liveAddSlot}));
+    app.querySelectorAll('[data-live-add-queue]').forEach(button=>button.onclick=()=>openJoinDialog(token,{court:'queue',group:+button.dataset.liveAddQueue,slot:+button.dataset.liveAddSlot}));
+    app.querySelectorAll('[data-live-cancel-court]').forEach(button=>button.onclick=()=>openCancelDialog({court:+button.dataset.liveCancelCourt},token));
+    app.querySelectorAll('[data-live-cancel-queue]').forEach(button=>button.onclick=()=>openCancelDialog({court:'queue',group:+button.dataset.liveCancelQueue},token));
   }
   async function load(token,paint=true,allowEditing=false,forcePaint=false,gateOnly=false){
     if(saving||(editing&&!allowEditing))return null;
@@ -57,6 +62,16 @@ export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
   }
   function closeToggleDialog(dialog=toggleDialog){if(!dialog||toggleDialog!==dialog)return;dialog.close();dialog.remove();toggleDialog=null;}
   function showToggleError(dialog,text){const output=dialog.querySelector('#liveToggleError');if(output)output.textContent=text;}
+  function closeCancelDialog(dialog=cancelDialog){if(!dialog||cancelDialog!==dialog)return;dialog.close();dialog.remove();cancelDialog=null;}
+  function openCancelDialog(extra,token){
+    if(saving||cancelDialog||!current(token))return;const expectedVersion=model.version;
+    cancelDialog=document.createElement('dialog');cancelDialog.className='live-confirm-dialog';
+    cancelDialog.innerHTML='<div class="confirm-box"><p class="confirm-msg">대기 취소하시겠습니까?</p><p id="liveCancelError" class="live-join-error" role="alert"></p><div class="confirm-actions"><button type="button" id="liveCancelNo">아니오</button><button type="button" id="liveCancelYes" class="danger">예</button></div></div>';
+    document.body.append(cancelDialog);const dialog=cancelDialog,yes=dialog.querySelector('#liveCancelYes'),close=()=>closeCancelDialog(dialog);
+    dialog.querySelector('#liveCancelNo').onclick=close;dialog.addEventListener('cancel',event=>{event.preventDefault();close();},{once:true});
+    yes.onclick=async()=>{if(saving||yes.disabled||!current(token)||cancelDialog!==dialog)return;yes.disabled=true;try{const updated=await write('cancel',extra,token,expectedVersion);if(updated&&current(token)&&cancelDialog===dialog)close();}catch(error){if(isConflict(error)){close();await refreshConflict(error,token);}else{yes.disabled=false;const output=dialog.querySelector('#liveCancelError');if(output)output.textContent=error.message||'대기 취소를 하지 못했어요.';}}};
+    dialog.showModal();yes.focus();
+  }
   function closeNoticeDialog(dialog=noticeDialog){if(!dialog||noticeDialog!==dialog)return;dialog.close();dialog.remove();noticeDialog=null;}
   function openCurrentGameNotice(){
     if(noticeDialog)return;
@@ -81,8 +96,8 @@ export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
   function joinDestinations(){
     const courts=Array.isArray(model.courts)?model.courts:[];
     const available=courts.map((court,index)=>({court,index})).filter(({court})=>court.state==='waiting'&&!full(court));
-    const items=available.map(({court,index})=>({value:String(index),label:courtLabel(index)+' · '+countNames(court)+'/4명'}));
-    if(queue().length||!items.length)items.push({value:'queue',label:'다음 대진 대기'});
+    const items=available.map(({court,index})=>({value:String(index),label:courtLabel(index)+' · '+countNames(court)+'/4명'})),waitingIndex=queue().findIndex(group=>!full(group));
+    if(queue().length||!items.length)items.push(waitingIndex>=0?{value:'queue:'+waitingIndex,label:'대기중인 대진 '+(waitingIndex+1)+' · '+countNames(queue()[waitingIndex])+'/4명'}:{value:'queue',label:'다음 대진 대기 · 0/4명'});
     return items;
   }
   function setJoinDestinations(dialog,preferred){
@@ -96,14 +111,16 @@ export function createLiveView({app,api,esc,EDITOR,message,isCurrent}){
     if(!isConflict(error)||!current(token)||joinDialog!==dialog)return;
     try{await load(token,false,true);if(current(token)&&joinDialog===dialog){if(!model.isOpen){closeJoinDialog(dialog,false);render(token);return;}setJoinDestinations(dialog,preferred);}}catch(refreshError){showJoinError(dialog,refreshError.message||'최신 대진을 불러오지 못했어요.');}
   }
-  function openJoinDialog(token){
-    if(!model.isOpen||!model.courts.length||editing||saving||!current(token))return;editing=true;const destinations=joinDestinations();
+  function openJoinDialog(token,target=null){
+    if(!model.isOpen||!model.courts.length||editing||saving||!current(token))return;editing=true;const single=Boolean(target),destinations=joinDestinations();
+    const targetValue=target?(target.court==='queue'?'queue:'+target.group:String(target.court)):null,targetLabel=target?(target.court==='queue'?'대기중인 대진 '+(target.group+1):courtLabel(target.court)):'';
     joinDialog=document.createElement('dialog');joinDialog.className='live-name-dialog';
-    joinDialog.innerHTML='<form method="dialog"><div class="dialog-head"><h2>실시간대진 들어가기</h2><button type="button" class="live-dialog-close" aria-label="닫기">×</button></div><label for="liveJoinName">이름</label><input id="liveJoinName" maxlength="40" autocomplete="off" required><label for="liveJoinCourt">들어갈 대진</label><select id="liveJoinCourt">'+destinations.map(item=>'<option value="'+item.value+'">'+esc(item.label)+'</option>').join('')+'</select><p id="liveJoinError" class="live-join-error" role="alert"></p><p class="muted">완료하면 선택한 대진의 빈 자리에 순서대로 등록됩니다.</p><div class="sticky-actions"><button type="submit" class="primary" id="liveJoinSave">완료</button><button type="button" id="liveJoinCancel">취소</button></div></form>';
-    document.body.append(joinDialog);const dialog=joinDialog,input=dialog.querySelector('#liveJoinName'),select=dialog.querySelector('#liveJoinCourt'),save=dialog.querySelector('#liveJoinSave'),cancel=()=>closeJoinDialog(dialog);
+    const fields=Array.from({length:single?1:4},(_,index)=>{const id=index?'liveJoinName'+(index+1):'liveJoinName';return '<label for="'+id+'">이름 '+(index+1)+'</label><input class="live-join-name" id="'+id+'" maxlength="40" autocomplete="off" placeholder="'+(index?'선택 입력':'이름을 입력해주세요')+'">';}).join('');
+    joinDialog.innerHTML='<form method="dialog"><div class="dialog-head"><h2>'+(single?'빈자리 채우기':'실시간대진 들어가기')+'</h2><button type="button" class="live-dialog-close" aria-label="닫기">×</button></div><div class="live-name-fields">'+fields+'</div><label for="liveJoinCourt">들어갈 대진</label><select id="liveJoinCourt"'+(single?' disabled':'')+'>'+(single?'<option value="'+targetValue+'">'+esc(targetLabel)+'</option>':destinations.map(item=>'<option value="'+item.value+'">'+esc(item.label)+'</option>').join(''))+'</select><p id="liveJoinError" class="live-join-error" role="alert"></p><p class="muted">'+(single?'이름을 입력하면 선택한 빈자리에 등록됩니다.':'1명부터 4명까지 입력한 뒤 한 번에 등록할 수 있습니다.')+'</p><div class="sticky-actions"><button type="submit" class="primary" id="liveJoinSave">완료</button><button type="button" id="liveJoinCancel">취소</button></div></form>';
+    document.body.append(joinDialog);const dialog=joinDialog,inputs=[...dialog.querySelectorAll('.live-join-name')],input=inputs[0],select=dialog.querySelector('#liveJoinCourt'),save=dialog.querySelector('#liveJoinSave'),cancel=()=>closeJoinDialog(dialog);
     dialog.querySelector('.live-dialog-close').onclick=cancel;dialog.querySelector('#liveJoinCancel').onclick=cancel;dialog.addEventListener('cancel',event=>{event.preventDefault();cancel();},{once:true});
-    dialog.querySelector('form').onsubmit=async event=>{event.preventDefault();if(saving||input.dataset.composing==='true')return;const name=input.value.trim();if(!name||name.length>40){showJoinError(dialog,'이름은 1~40자로 입력해주세요.');return;}save.disabled=true;const chosen=select.value,court=chosen==='queue'?'queue':Number(chosen);try{const updated=await write('join',{court,name},token);if(updated&&current(token)&&joinDialog===dialog)closeJoinDialog(dialog);}catch(error){if(!current(token)||joinDialog!==dialog)return;save.disabled=false;if(error.message==='현재 게임중인 회원입니다. 등록할 수 없습니다.')openCurrentGameNotice();else if(isConflict(error))await refreshJoinConflict(error,token,dialog,chosen);else showJoinError(dialog,error.message||'참가 등록을 하지 못했어요.');}};
-    input.addEventListener('compositionstart',()=>input.dataset.composing='true');input.addEventListener('compositionend',()=>delete input.dataset.composing);joinDialog.showModal();input.focus();
+    dialog.querySelector('form').onsubmit=async event=>{event.preventDefault();if(saving||inputs.some(field=>field.dataset.composing==='true'))return;const names=inputs.map(field=>field.value.trim()).filter(Boolean);if(!names.length||names.some(name=>name.length>40)){showJoinError(dialog,'이름은 1~40자로, 최소 1명 입력해주세요.');return;}if(new Set(names).size!==names.length){showJoinError(dialog,'같은 이름을 두 번 입력할 수 없습니다.');return;}save.disabled=true;const chosen=targetValue||select.value,parts=chosen.split(':'),court=parts[0]==='queue'?'queue':Number(parts[0]),extra={court,names};if(parts[0]==='queue'&&parts[1]!==undefined)extra.group=Number(parts[1]);if(single)extra.slot=target.slot;try{const updated=await write('join',extra,token);if(updated&&current(token)&&joinDialog===dialog)closeJoinDialog(dialog);}catch(error){if(!current(token)||joinDialog!==dialog)return;save.disabled=false;if(error.message==='현재 게임중인 회원입니다. 등록할 수 없습니다.')openCurrentGameNotice();else if(isConflict(error))await refreshJoinConflict(error,token,dialog,chosen);else showJoinError(dialog,error.message||'참가 등록을 하지 못했어요.');}};
+    inputs.forEach(field=>{field.addEventListener('compositionstart',()=>field.dataset.composing='true');field.addEventListener('compositionend',()=>delete field.dataset.composing);});joinDialog.showModal();input.focus();
   }
   return {open:async token=>{stop();activeToken=token;if(!current(token))return;app.innerHTML='<p class="empty">실시간대진을 불러오는 중…</p>';try{await load(token,true,false,true);if(current(token))startPoll(token);}catch(error){if(current(token))app.innerHTML='<div class="panel error-box">'+esc(error.message||'실시간대진을 불러오지 못했어요.')+'</div>';}} ,stop};
 }

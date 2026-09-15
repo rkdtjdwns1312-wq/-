@@ -13,7 +13,7 @@ export async function liveCourts(request,env){
     if(request.method==='GET')return json({data:visible(unpack(await env.DB.prepare('SELECT * FROM live_courts WHERE id=1').first()),editor)});
     const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용이 너무 큽니다.'},413);
     let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-    if(!input||!Number.isInteger(input.version)||input.version<0||!['create','open','close','join','leave','end'].includes(input.action))return json({error:'입력 내용을 확인해주세요.'},400);
+    if(!input||!Number.isInteger(input.version)||input.version<0||!['create','open','close','join','leave','cancel','end'].includes(input.action))return json({error:'입력 내용을 확인해주세요.'},400);
     if(['create','open','close'].includes(input.action)&&!editor)return json({error:'코트 생성과 실시간대진 열기·종료는 운영진만 할 수 있습니다.'},403);
     const row=await env.DB.prepare('SELECT * FROM live_courts WHERE id=1').first(),current=unpack(row);
     if(input.version!==current.version)return conflict();
@@ -30,35 +30,59 @@ export async function liveCourts(request,env){
       if(input.court==='queue'){
         if(!courts.length)return json({error:'운영진이 코트를 연 뒤 참가해주세요.'},400);
         if(input.action==='join'){
-          if(typeof input.name!=='string'||!input.name.trim()||input.name.trim().length>40||/[\u0000-\u001f\u007f]/.test(input.name))return json({error:'이름은 줄바꿈 없이 1~40자로 입력해주세요.'},400);
-          const name=input.name.trim();
-          if(courts.some(c=>c.names.includes(name)))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
-          if(queue.some(g=>g.names.includes(name)))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
+          const names=Array.isArray(input.names)?input.names:typeof input.name==='string'?[input.name]:[];
+          if(!names.length||names.length>4||names.some(name=>typeof name!=='string'||!name.trim()||name.trim().length>40||/[\u0000-\u001f\u007f]/.test(name)))return json({error:'이름은 줄바꿈 없이 1~40자로, 한 번에 4명까지 입력해주세요.'},400);
+          const clean=names.map(name=>name.trim());
+          if(new Set(clean).size!==clean.length)return json({error:'같은 이름을 한 번에 두 번 등록할 수 없습니다.'},409);
+          if(clean.some(name=>courts.some(c=>c.names.includes(name))))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
+          if(clean.some(name=>queue.some(g=>g.names.includes(name))))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
           if(!queue.length&&courts.some(c=>c.state==='waiting'&&c.names.includes('')))return json({error:'빈자리가 있는 코트에 먼저 들어가주세요.'},409);
-          let group=queue.find(g=>g.names.includes(''));
+          let group;
+          if(input.group!==undefined){if(!Number.isInteger(input.group)||!queue[input.group])return json({error:'대기중인 대진을 확인해주세요.'},400);group=queue[input.group];}
+          else group=queue.find(g=>g.names.includes(''));
           if(!group){if(queue.length>=100)return json({error:'대기 인원이 많습니다. 잠시 후 다시 참가해주세요.'},409);group={names:['','','','']};queue.push(group);}
-          group.names[group.names.indexOf('')]=name;
+          if(input.slot!==undefined){
+            if(clean.length!==1||!Number.isInteger(input.slot)||input.slot<0||input.slot>3||group.names[input.slot])return json({error:'선택한 빈자리를 확인해주세요.'},409);
+            group.names[input.slot]=clean[0];
+          }else{
+            const slots=group.names.map((name,index)=>name?'':index).filter(index=>index!=='');
+            if(slots.length<clean.length)return json({error:'선택한 대진에는 빈자리가 '+slots.length+'개 있습니다.'},409);
+            clean.forEach((name,index)=>{group.names[slots[index]]=name;});
+          }
         }else if(input.action==='leave'){
           if(!Number.isInteger(input.group)||!queue[input.group]||!Number.isInteger(input.slot)||input.slot<0||input.slot>3||!queue[input.group].names[input.slot])return json({error:'대기중인 이름을 확인해주세요.'},400);
           queue[input.group].names[input.slot]='';
           queue=queue.filter(g=>g.names.some(Boolean));
+        }else if(input.action==='cancel'){
+          if(!Number.isInteger(input.group)||!queue[input.group])return json({error:'대기중인 대진을 확인해주세요.'},400);
+          queue.splice(input.group,1);
         }else return json({error:'대기 명단에서 사용할 수 없는 기능입니다.'},400);
       }else{
       if(!Number.isInteger(input.court)||!courts[input.court])return json({error:'코트를 먼저 생성하거나 최신 화면을 확인해주세요.'},400);
       const court=courts[input.court],full=()=>court.names.every(Boolean)&&new Set(court.names).size===4;
       if(input.action==='join'){
-        if(typeof input.name!=='string')return json({error:'이름을 입력해주세요.'},400);
-        const name=input.name.trim();
-        if(!name||name.length>40||/[\u0000-\u001f\u007f]/.test(name))return json({error:'이름은 줄바꿈 없이 1~40자로 입력해주세요.'},400);
-        if(courts.some(c=>c.names.includes(name)))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
-        if(queue.some(g=>g.names.includes(name)))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
+        const names=Array.isArray(input.names)?input.names:typeof input.name==='string'?[input.name]:[];
+        if(!names.length||names.length>4||names.some(name=>typeof name!=='string'||!name.trim()||name.trim().length>40||/[\u0000-\u001f\u007f]/.test(name)))return json({error:'이름은 줄바꿈 없이 1~40자로, 한 번에 4명까지 입력해주세요.'},400);
+        const clean=names.map(name=>name.trim());
+        if(new Set(clean).size!==clean.length)return json({error:'같은 이름을 한 번에 두 번 등록할 수 없습니다.'},409);
+        if(clean.some(name=>courts.some(c=>c.names.includes(name))))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
+        if(clean.some(name=>queue.some(g=>g.names.includes(name))))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
         if(court.state!=='waiting')return json({error:'대기중인 코트에만 들어갈 수 있습니다.'},409);
-        const slot=court.names.indexOf('');if(slot<0)return json({error:'코트가 가득 찼습니다. 다른 코트를 선택해주세요.'},409);
-        court.names[slot]=name;
+        if(input.slot!==undefined){
+          if(clean.length!==1||!Number.isInteger(input.slot)||input.slot<0||input.slot>3||court.names[input.slot])return json({error:'선택한 빈자리를 확인해주세요.'},409);
+          court.names[input.slot]=clean[0];
+        }else{
+          const slots=court.names.map((name,index)=>name?'':index).filter(index=>index!=='');
+          if(slots.length<clean.length)return json({error:'선택한 대진에는 빈자리가 '+slots.length+'개 있습니다.'},409);
+          clean.forEach((name,index)=>{court.names[slots[index]]=name;});
+        }
       }else if(input.action==='leave'){
         if(court.state!=='waiting')return json({error:'대기중일 때만 참가를 취소할 수 있습니다.'},409);
         if(!Number.isInteger(input.slot)||input.slot<0||input.slot>3||!court.names[input.slot])return json({error:'등록된 이름칸을 확인해주세요.'},400);
         court.names[input.slot]='';
+      }else if(input.action==='cancel'){
+        if(court.state!=='waiting')return json({error:'대기중인 대진만 취소할 수 있습니다.'},409);
+        courts[input.court]=blank();
       }else if(input.action==='end'){
         if(!full())return json({error:'네 명이 들어간 코트에서 대진을 종료해주세요.'},409);
         courts[input.court]=queue.length?{names:queue.shift().names,state:'waiting'}:blank();

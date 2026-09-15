@@ -137,7 +137,7 @@ export async function runLiveUIChecks(){
     assert.equal(h.paints,paints,'older GET completing after POST cannot restore old players');
     assert.ok(h.app.innerHTML.includes('NewD'));
     const write=h.calls.find(call=>call.method==='POST');
-    assert.deepEqual(write.body,{version:1,action:'join',court:0,name:'NewD'});
+    assert.deepEqual(write.body,{version:1,action:'join',court:0,names:['NewD']});
     assert.equal(write.headers['x-kokkiri-editor'],undefined,'ordinary members can use the modal');
     h.view.stop();
   }
@@ -165,6 +165,35 @@ export async function runLiveUIChecks(){
     assert.ok(!h.app.innerHTML.includes('1번 코트 1번 참가자 A'));
     assert.ok(h.app.innerHTML.includes('대기중인 대진 1')&&!h.app.innerHTML.includes('대기중인 대진 2'));
     h.view.stop();
+  }
+  {
+    const initial={version:1,isOpen:true,courts:[court(['','','',''])],queue:[],updatedAt:null};
+    const h=harness(initial);await h.open();const dialog=h.join(),fields=dialog.querySelectorAll('.live-join-name');
+    assert.equal(fields.length,4,'the main join dialog provides four name fields');
+    ['가','나','다','라'].forEach((name,index)=>{fields[index].value=name;});
+    h.setAPI(async()=>({data:{...initial,version:2,courts:[court(['가','나','다','라'])]}}));await h.submit(dialog);
+    assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:1,action:'join',court:0,names:['가','나','다','라']});
+    assert.ok(h.app.innerHTML.includes('1번 코트 4번 참가자 라'));h.view.stop();
+  }
+  {
+    const initial={version:1,isOpen:true,courts:[court(['A','B','','D'])],queue:[{names:['E','','G','H']}],updatedAt:null};
+    const h=harness(initial);await h.open();
+    assert.equal(h.app.querySelectorAll('[data-live-leave-court]').length,3,'waiting names have individual x buttons');
+    assert.equal(h.app.querySelectorAll('[data-live-add-court]').length,1,'a vacated court slot has a plus button');
+    assert.equal(h.app.querySelectorAll('[data-live-add-queue]').length,1,'a vacated queue slot has a plus button');
+    const add=h.app.querySelector('[data-live-add-court]');add.onclick();const fill=h.dialogs.at(-1);
+    assert.equal(fill.querySelectorAll('.live-join-name').length,1,'a plus button opens one exact-slot field');fill.querySelector('#liveJoinName').value='C';
+    h.setAPI(async()=>({data:{...initial,version:2,courts:[court(['A','B','C','D'])]}}));await h.submit(fill);
+    assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:1,action:'join',court:0,names:['C'],slot:2});h.view.stop();
+  }
+  {
+    const initial={version:1,isOpen:true,courts:[court(['A','','',''])],queue:[{names:['E','F','','']}],updatedAt:null};
+    const h=harness(initial);await h.open();const cancelButton=h.app.querySelector('[data-live-cancel-queue]');assert.ok(cancelButton);
+    cancelButton.onclick();let dialog=h.dialogs.at(-1);assert.ok(dialog.innerHTML.includes('대기 취소하시겠습니까?'));
+    dialog.querySelector('#liveCancelNo').onclick();assert.equal(h.calls.filter(call=>call.method==='POST').length,0,'no never cancels a waiting game');
+    h.app.querySelector('[data-live-cancel-queue]').onclick();dialog=h.dialogs.at(-1);
+    h.setAPI(async()=>({data:{...initial,version:2,queue:[]}}));await dialog.querySelector('#liveCancelYes').onclick();
+    assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:1,action:'cancel',court:'queue',group:0});assert.ok(!h.app.innerHTML.includes('대기중인 대진 1'));h.view.stop();
   }
   {
     const h=harness();await h.open();const read=deferred();h.setAPI(()=>read.promise);
