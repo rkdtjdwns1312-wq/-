@@ -31,5 +31,5 @@
   // Cloudflare 대시보드에서 요청/오류 로그를 볼 수 있게 하는 설정
   "observability": { "enabled": true },
   // 요청 074: 주간 자동 백업. 매주 일요일 00:00(UTC)에 scheduled 핸들러가 백업을 만든다.
-  "triggers": { "crons": ["0 0 * * 0"] }
+  "triggers": { "crons": ["0 0 * * SUN"] }
 }
