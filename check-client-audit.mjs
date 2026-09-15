@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { runProgressUIChecks } from './check-progress-ui.mjs';
 import { runLiveUIChecks } from './check-live-ui.mjs';
+import { createScheduleTools } from './dist/server/schedule-tools.js';
 
 const source=await readFile(new URL('./dist/server/boards-client.js',import.meta.url),'utf8');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
@@ -81,7 +82,7 @@ async function checkEncodedNoticeNavigation(){
 async function checkPickerCancelIsolation(){
   const h=dialogHarness(),people=[{id:'m1',name:'회원',type:'member',seed:'A',points:100}];
   const openPicker=compile('openPicker',{
-    EDITOR:'operator',getPeople:async()=>{},message(){},people,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
+    EDITOR:'operator',getPeople:async()=>people,message(){},people,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
     crypto:{randomUUID:()=> 'adhoc-id'},scheduleTools:{generate(){return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
   });
   await openPicker(null);
@@ -108,12 +109,76 @@ async function checkPickerLocalNamesAndNavigation(){
       {id:'a',name:'A',type:'member',seed:'C',points:60},{id:'b',name:'B',type:'member',seed:'D',points:40},{id:'c',name:'C',type:'member',seed:'E',points:20},
     ];
     const openPicker=compile('openPicker',{
-      EDITOR:'operator',getPeople:async()=>{},message(){},people,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,nameOf:()=> 'GLOBAL-NAME',
+      EDITOR:'operator',getPeople:async()=>people,message(){},people,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,nameOf:()=> 'GLOBAL-NAME',
       crypto:{randomUUID:()=> 'new'},scheduleTools:{generate(value){roster.push(...value);return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
     });
     await openPicker({id:'draft',participantIds:people.map(p=>p.id),names:['중복 (회원)','중복 (게스트)','A','B','C'],courts:1,rounds:1,absent:[]});
-    h.$('generate').onclick();
+    await h.$('generate').onclick();
     assert.deepEqual(roster.map(person=>person.name),['중복 (회원)','중복 (게스트)','A','B','C'],'the generated roster must use the picker-local duplicate-name labels');
+  }
+}
+
+async function checkLatestDrawPoints(){
+  const fixture=[['주밤',116],['아식스',20],['두진',97],['시오',104]].map(([name,points],i)=>({id:'balance-'+i,name,points,type:'member',seed:'A',is_operator:0}));
+  const fresh=fixture.map(p=>({...p,points:p.name==='아식스'?110:p.points}));
+  const pickerInput={id:'balance-draft',participantIds:fixture.map(p=>p.id),names:fixture.map(p=>p.name),courts:1,rounds:1,schedule:[{method:'same'}],absent:[]};
+  {
+    const h=dialogHarness(),made=[];let current=fixture,calls=0;
+    const scope={EDITOR:'operator',initial:fixture,api:async()=>{calls++;return {people:current};},syncOperators(){},message(){},dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
+      crypto:{randomUUID:()=> 'local-draw'},scheduleTools:createScheduleTools(),OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule:d=>made.push(d)};
+    const picker=new Function(...Object.keys(scope),'let people=initial,peopleRead=0,routeToken=1,dirty=false;'+actual('getPeople')+actual('openPicker')+';return openPicker;')(...Object.values(scope));
+    await picker(pickerInput);assert.equal(calls,1,'opening a picker must refresh an existing page cache');
+    current=fresh;await h.$('generate').onclick();
+    assert.equal(calls,2,'generation must refresh points changed while the picker was open');
+    assert.equal(made.length,1);
+    const match=made[0].schedule[0].g[0],points=new Map(fresh.map(p=>[p.name,p.points]));
+    assert.deepEqual([match.slice(0,2).sort(),match.slice(2).sort()].sort(),[['주밤','두진'].sort(),['아식스','시오'].sort()].sort());
+    assert.equal(Math.abs(points.get(match[0])+points.get(match[1])-points.get(match[2])-points.get(match[3]))/2,0.5,'real picker must not use the outdated 20-point cache for Asics');
+  }
+  {
+    const first=deferred(),second=deferred();let calls=0;
+    const scope={initial:fixture,api:()=>++calls===1?first.promise:second.promise,syncOperators(){}};
+    const cache=new Function(...Object.keys(scope),'let people=initial,peopleRead=0;'+actual('getPeople')+';return {getPeople,cached:()=>people};')(...Object.values(scope));
+    const older=cache.getPeople(true),newer=cache.getPeople(true);second.resolve({people:fresh});await newer;first.resolve({people:fixture});await older;
+    assert.deepEqual(cache.cached(),fresh,'an older late response cannot overwrite a newer cache');
+  }
+  for(const scenario of ['failure','closed','changed','removed','renamed']){
+    const h=dialogHarness(),load=deferred(),made=[];let calls=0;
+    const picker=compilePicker({EDITOR:'operator',getPeople:async()=>++calls===1?fresh:load.promise,message(){},people:fresh,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
+      crypto:{randomUUID:()=> 'draw'},scheduleTools:createScheduleTools(),OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule:d=>made.push(d),dirty:false});
+    await picker.openPicker(pickerInput);const submit=h.$('generate'),pending=submit.onclick();await submit.onclick();assert.equal(calls,2,'double-clicking generates one fresh read');
+    if(scenario==='closed')h.dialog.close();
+    if(scenario==='changed')h.$('courts').value='2';
+    if(scenario==='failure')load.reject(Error('offline'));
+    else load.resolve(scenario==='removed'?fresh.slice(1):scenario==='renamed'?fresh.map((p,i)=>({...p,name:i?'renamed':p.name})):fresh);
+    await pending;assert.equal(made.length,0,scenario+' must not generate from invalid/stale points or reopen a canceled picker');
+    assert.equal(submit.disabled,false,'failed or canceled refresh releases the generate button');
+    if(scenario!=='closed')assert.ok(h.$('pickerError').textContent);
+  }
+}
+
+async function checkAddedCourtBalance(){
+  const members=[['주밤',116],['아식스',110],['두진',97],['시오',104]].map(([name,points],i)=>({id:'extra-'+i,name,points}));
+  const fixture=()=>({id:'local-extra',operation:'original',names:members.map(p=>p.name),participantIds:members.map(p=>p.id),schedule:[{method:'same',g:[members.map(p=>p.name)],rest:[]}]});
+  const make=()=>{
+    const messages=[],paint={innerHTML:''};let read=async()=>members;
+    const scope={initial:fixture(),scheduleTools:createScheduleTools(),getPeople:()=>read(),alert:text=>messages.push(text),message:text=>messages.push(text),$:()=>paint,scheduleHTML:()=>'<updated/>'};
+    const h=new Function(...Object.keys(scope),'let draft=initial,routeToken=1,saving=false,addingCourt=false;function changed(){draft.operation="changed";}'+actual('addBalancedCourt')+';return {addBalancedCourt,current:()=>draft,navigate(){draft=null;routeToken++;}};')(...Object.values(scope));
+    return {...h,messages,paint,setRead(fn){read=fn;}};
+  };
+  for(const method of ['same','balanced']){
+    const h=make(),d=h.current();d.schedule[0].method=method;const original=structuredClone(d.schedule[0].g[0]);
+    await h.addBalancedCourt(0);
+    assert.deepEqual(d.schedule[0].g[0],original,'adding a court does not reorder a manually chosen existing team');
+    assert.deepEqual(d.schedule[0].g[1],['주밤','두진','아식스','시오'],'new court uses optimal teams instead of taking the first two as one team');
+  }
+  for(const scenario of ['closed','edited','failure']){
+    const h=make(),d=h.current(),read=deferred();let calls=0;h.setRead(()=>{calls++;return read.promise;});
+    const pending=h.addBalancedCourt(0);await h.addBalancedCourt(0);assert.equal(calls,1,'extra court double click shares one pending operation');
+    if(scenario==='closed')h.navigate();if(scenario==='edited')d.operation='another-edit';
+    if(scenario==='failure')read.reject(Error('offline'));else read.resolve(members);
+    await pending;assert.equal(d.schedule[0].g.length,1,'stale or failed extra court read must not modify the draft');
+    if(scenario!=='closed')assert.ok(h.messages.length);
   }
 }
 
@@ -196,6 +261,8 @@ export async function runClientAuditChecks(){
   await checkEncodedNoticeNavigation();
   await checkPickerCancelIsolation();
   await checkPickerLocalNamesAndNavigation();
+  await checkLatestDrawPoints();
+  await checkAddedCourtBalance();
   await checkSettlementVersions();
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();

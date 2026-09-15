@@ -1,6 +1,30 @@
 // This factory is also serialized into the browser. Keep it self-contained.
 export function createScheduleTools(){
   const missed=(d,name)=>Object.hasOwn(d.lateRounds||{},name)?Number(d.lateRounds[name])||0:0;
+  // The picker sends numbers, but keep direct/server callers consistent when
+  // a numeric database value is represented as a string.
+  const pts=p=>{const value=Number(p.points);return Number.isFinite(value)?value:0;};
+  const pair=(a,b)=>JSON.stringify([a.id,b.id].sort());
+  const addPartnerCounts=(pairCount,match)=>{for(const [a,b] of [[match[0],match[1]],[match[2],match[3]]]){
+    const key=pair(a,b);pairCount.set(key,(pairCount.get(key)||0)+1);
+  }};
+  function chooseFour(roster4,method,pairCount){
+    const splits=[[0,1,2,3],[0,2,1,3],[0,3,1,2]];
+    const choices=splits.map(indices=>{const players=indices.map(i=>roster4[i]);return {
+      players,
+      gap:method==='random'?0:Math.abs(pts(players[0])+pts(players[1])-pts(players[2])-pts(players[3])),
+      repeats:(pairCount.get(pair(players[0],players[1]))||0)+(pairCount.get(pair(players[2],players[3]))||0)
+    };}).sort((a,b)=>a.gap-b.gap||a.repeats-b.repeats);
+    return choices[0].players;
+  }
+  function balanceFour(roster4,method,previousMatches=[]){
+    if(!Array.isArray(roster4)||roster4.length!==4||roster4.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(roster4.map(p=>p.id)).size!==4||new Set(roster4.map(p=>p.name)).size!==4)throw Error('4명 대진 참가자 정보를 확인해주세요.');
+    if(!['same','balanced','random'].includes(method))throw Error('라운드 방식을 확인해주세요.');
+    if(!Array.isArray(previousMatches)||previousMatches.some(match=>!Array.isArray(match)||match.length!==4||match.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(match.map(p=>p.id)).size!==4||new Set(match.map(p=>p.name)).size!==4))throw Error('이전 대진 정보를 확인해주세요.');
+    const pairCount=new Map();
+    previousMatches.forEach(match=>addPartnerCounts(pairCount,match));
+    return chooseFour(roster4,method,pairCount);
+  }
   function availableNames(d,ri){return d.names.filter(name=>missed(d,name)<=ri);}
   function refreshRound(d,ri){
     const r=d.schedule[ri],available=availableNames(d,ri),playing=new Set(r.g.flat());
@@ -24,10 +48,8 @@ export function createScheduleTools(){
     if(!Array.isArray(methods))throw Error('라운드 방식을 확인해주세요.');
     for(const p of roster){const late=p.lateRounds??0;if(!Number.isInteger(late)||late<0||late>5)throw Error('늦참은 0~5라운드 사이로 지정해주세요.');}
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
-    const pts=p=>Number.isFinite(p.points)?p.points:0;
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
     const restCount=new Map(roster.map(p=>[p.id,0])),pairCount=new Map();
-    const pair=(a,b)=>JSON.stringify([a.id,b.id].sort());
     const out=[];
     for(let ri=0;ri<rounds;ri++){
       const available=roster.filter(p=>(Number(p.lateRounds)||0)<=ri);
@@ -53,14 +75,8 @@ export function createScheduleTools(){
         }
       }
       const g=groups.map(group=>{
-        // same/adjacent always mix stronger and weaker players across teams.
-        const splits=method==='random'?[[0,1,2,3],[0,2,1,3],[0,3,1,2]]:[[0,3,1,2],[0,2,1,3]];
-        const choices=splits.map(sp=>{
-          const s=sp.map(i=>group[i]);
-          return {s,gap:method==='random'?0:Math.abs(pts(s[0])+pts(s[1])-pts(s[2])-pts(s[3])),repeats:(pairCount.get(pair(s[0],s[1]))||0)+(pairCount.get(pair(s[2],s[3]))||0)};
-        }).sort((a,b)=>a.gap-b.gap||a.repeats-b.repeats);
-        const s=choices[0].s;
-        for(const [a,b] of [[s[0],s[1]],[s[2],s[3]]])pairCount.set(pair(a,b),(pairCount.get(pair(a,b))||0)+1);
+        const s=chooseFour(group,method,pairCount);
+        addPartnerCounts(pairCount,s);
         return s.map(p=>p.name);
       });
       out.push({round:ri+1,method,g,rest:resting.map(p=>p.name),late});
@@ -86,5 +102,5 @@ export function createScheduleTools(){
     }
     return out;
   }
-  return {availableNames,refreshRound,replacePlayer,generate,matchState,cleanProgress};
+  return {availableNames,refreshRound,replacePlayer,balanceFour,generate,matchState,cleanProgress};
 }

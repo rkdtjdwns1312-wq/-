@@ -81,13 +81,13 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     closeList();
     return parts.join('');
   }
-  let people=[],draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false;
+  let people=[],peopleRead=0,draft=null,dirty=false,routeToken=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false;
   let liveView=null;
   const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
-  async function getPeople(){if(!people.length){people=(await api('/api/people')).people;syncOperators(people);}return people;}
+  async function getPeople(force=false){if(force||!people.length){const request=++peopleRead,next=(await api('/api/people')).people;if(!Array.isArray(next))throw Error('최신 명단을 확인하지 못했습니다. 다시 시도해주세요.');if(request===peopleRead){people=next;syncOperators(people);}return next;}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
   async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
@@ -171,6 +171,31 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){++routeToken;stopPoll();draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
+  async function addBalancedCourt(ri){
+    if(!draft||saving||addingCourt)return;
+    const d=draft,r=d.schedule[ri],token=routeToken,operation=d.operation;
+    if(!r)return;
+    if(r.g.length>=20)return alert('한 라운드에는 최대 20개의 대진을 만들 수 있어요.');
+    const pool=[...(r.rest||[]),...scheduleTools.availableNames(d,ri)],four=[...new Set(pool)].slice(0,4);
+    if(four.length<4)return alert('코트를 추가하려면 이 라운드에 참여 가능한 인원이 4명 이상 필요해요.');
+    addingCourt=true;
+    const active=()=>draft===d&&routeToken===token;
+    try{
+      let match=four;
+      if(r.method!=='random'){
+        const latest=await getPeople(true);
+        if(!active()||saving)return;
+        if(d.operation!==operation)throw Error('대진 내용이 바뀌었습니다. 코트 추가를 다시 눌러주세요.');
+        const byId=new Map(latest.map(p=>[p.id,p])),byName=new Map(latest.map(p=>[p.name,p]));
+        const player=name=>{const index=d.names.indexOf(name),id=d.participantIds?.[index],p=id?byId.get(id):byName.get(name);return {id:id||name,name,points:p?Number(p.points):0};};
+        const previous=d.schedule.slice(0,ri+1).flatMap(round=>round.g.map(group=>group.map(player)));
+        match=scheduleTools.balanceFour(four.map(player),r.method||'balanced',previous).map(p=>p.name);
+      }
+      if(!active()||saving)return;
+      r.g.push(match);scheduleTools.refreshRound(d,ri);changed();$('editMatches').innerHTML=scheduleHTML(d,true,true);
+    }catch(error){if(active())message(error.message||'최신 점수를 불러오지 못했습니다. 코트 추가를 다시 눌러주세요.',true);}
+    finally{addingCourt=false;}
+  }
   function editSchedule(d){
     stopPoll();startDraft(d);draft.results=draft.results||{};draft.absent=Array.isArray(draft.absent)?draft.absent:[];
     app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수 자리는 드롭다운으로 바꿀 수 있어요. 승패 기록과 대진 마감(점수 확정)는 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true)+'</div></section>';
@@ -179,7 +204,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
       const abs=e.target.closest('[data-absent-name]');
       if(abs){const name=abs.dataset.absentName;const i=draft.absent.indexOf(name);if(i>=0)draft.absent.splice(i,1);else draft.absent.push(name);changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
       const add=e.target.closest('[data-add-court]');
-      if(add){const ri=+add.dataset.addCourt,r=draft.schedule[ri];const pool=[...(r.rest||[]),...scheduleTools.availableNames(draft,ri)],seen=new Set(),four=[];for(const n of pool){if(!seen.has(n)){seen.add(n);four.push(n);if(four.length===4)break;}}if(four.length<4)return alert('코트를 추가하려면 이 라운드에 참여 가능한 인원이 4명 이상 필요해요.');r.g.push(four);scheduleTools.refreshRound(draft,ri);changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
+      if(add){void addBalancedCourt(+add.dataset.addCourt);return;}
       const del=e.target.closest('[data-del-court]');
       if(del){const parts=del.dataset.delCourt.split('-'),ri=+parts[0],mi=+parts[1],r=draft.schedule[ri];if(r.g.length<=1)return alert('한 라운드에는 최소 1개의 대진이 있어야 해요.');if(!confirm((mi+1)+'번 대진을 삭제할까요?'))return;r.g.splice(mi,1);const nr={};for(const k in draft.results){const kp=k.split('-'),kr=+kp[0],km=+kp[1];if(kr!==ri){nr[k]=draft.results[k];continue;}if(km===mi)continue;nr[kr+'-'+(km>mi?km-1:km)]=draft.results[k];}draft.results=nr;scheduleTools.refreshRound(draft,ri);changed();$('editMatches').innerHTML=scheduleHTML(draft,true,true);return;}
       const button=e.target.closest('[data-result-key]');if(!button)return;
@@ -308,9 +333,10 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   async function openPicker(existing){
     if(!EDITOR)return;
     const token=routeToken;
-    try{await getPeople();}catch(e){message(e.message,true);return;}
+    let latestPeople;
+    try{latestPeople=await getPeople(true);}catch(e){if(token===routeToken)message(e.message,true);return;}
     if(token!==routeToken)return;
-    const pickerPeople=people.slice();
+    const pickerPeople=latestPeople.slice();
     const pickerNameOf=p=>pickerPeople.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;
     if(existing&&Array.isArray(existing.participantIds)&&Array.isArray(existing.names))existing.participantIds.forEach((pid,i)=>{const nm=existing.names[i];if(pid&&typeof nm==='string'&&nm.trim()&&!pickerPeople.some(p=>p.id===pid))pickerPeople.push({id:pid,name:nm,type:'guest',seed:'미정',points:0,adhoc:true});});
     let active='member',selected=new Set(existing?.participantIds?.length?existing.participantIds:pickerPeople.filter(p=>existing?.names.includes(pickerNameOf(p))).map(p=>p.id));
@@ -336,20 +362,30 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     $('memberTab').onclick=()=>{active='member';render();};$('guestTab').onclick=()=>{active='guest';render();};$('searchPeople').oninput=render;$('selectAll').onclick=()=>{visible().forEach(p=>selected.add(p.id));render();};$('clearAll').onclick=()=>{selected.clear();render();};$('closePicker').onclick=()=>dialog.close();
     $('addGuest').onclick=()=>{const inp=$('newGuestName'),name=inp.value.trim();if(!name)return alert('게스트 이름을 입력해주세요.');if(pickerPeople.some(p=>p.name===name))return alert('같은 이름이 이미 목록에 있어요. 이름을 다르게 적어주세요.');const g={id:crypto.randomUUID(),name,type:'guest',seed:'미정',points:0,adhoc:true};pickerPeople.push(g);selected.add(g.id);inp.value='';active='guest';$('searchPeople').value='';render();inp.focus();};
     $('newGuestName').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('addGuest').click();}};
-    $('generate').onclick=()=>{
+    let generating=false;
+    $('generate').onclick=async()=>{
+      if(generating)return;
       const c=Number($('courts').value),r=Number($('rounds').value),picked=pickerPeople.filter(p=>selected.has(p.id));
       if(picked.length<4)return alert('참가자 4명 이상을 선택해주세요.');
       if(!Number.isInteger(c)||c<1||c>20||!Number.isInteger(r)||r<1||r>20)return alert('코트와 라운드는 1~20 사이 정수로 입력해주세요.');
       if(existing&&!confirm('기존 대진 구성을 새로 만듭니다. 저장하기 전까지 게시된 대진은 그대로 유지됩니다. 계속할까요?'))return;
-      const roster=picked.map(p=>{const name=pickerNameOf(p);return {id:p.id,name,type:p.type,points:Number(p.points)||0,operator:OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name)};});
-      let schedule;try{schedule=scheduleTools.generate(roster,c,r,methods);}catch(error){$('pickerError').textContent=error.message||'대진을 만들지 못했어요. 늦참 설정과 참가 인원을 확인해주세요.';return;}
+      const button=$('generate'),active=()=>dialog.open&&$('generate')===button&&token===routeToken;
+      generating=true;button.disabled=true;const buttonText=button.textContent;button.textContent='최신 점수 확인 중…';
+      try{
+      const current=new Map((await getPeople(true)).map(p=>[p.id,p]));
+      if(!active())return;
+      if(picked.length!==selected.size||picked.some(p=>!selected.has(p.id))||c!==Number($('courts').value)||r!==Number($('rounds').value))throw Error('참가자나 코트 설정이 바뀌었습니다. 대진 만들기를 다시 눌러주세요.');
+      const roster=picked.map(p=>{const name=pickerNameOf(p),fresh=current.get(p.id);if(!fresh&&!p.adhoc||fresh&&(fresh.name!==p.name||fresh.type!==p.type))throw Error('회원 명단이 변경되었습니다. 참가자 선택창을 다시 열어주세요.');const points=Number((fresh||p).points);if(!Number.isFinite(points))throw Error(name+'님의 시드 점수를 확인해주세요.');return {id:p.id,name,type:p.type,points,operator:fresh?Boolean(fresh.is_operator):OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name)};});
+      const schedule=scheduleTools.generate(roster,c,r,methods);
       const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title:$('newTitle').value.trim()||stamp(),names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
       dialog.close();editSchedule(d);dirty=true;window.scrollTo(0,0);
+      }catch(error){if(active())$('pickerError').textContent=error.message||'최신 점수를 불러오지 못했습니다. 다시 시도해주세요.';}
+      finally{generating=false;if($('generate')===button){button.disabled=false;button.textContent=buttonText;}}
     };render();renderMethods();dialog.showModal();
   }
   async function seeds(token){
     let type='member',editing=false;const checked=new Set();
-    async function load(){await getPeople();const rd=await api('/api/rankings');if(token!==routeToken)return null;return rd;}
+    async function load(){await getPeople(true);const rd=await api('/api/rankings');if(token!==routeToken)return null;return rd;}
     let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;syncOperators(ranking);
     const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
     function movement(row){if(Number(row.rank_protected)===1)return '<span class="rank-protected">보호적용</span>';const d=Number(row.rank_movement)||0;if(!d)return '<span class="muted">-</span>';return d>0?'<span class="rank-movement">▲ '+d+'</span>':'<span class="rank-down">▼ '+(-d)+'</span>';}

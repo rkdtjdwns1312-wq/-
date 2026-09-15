@@ -5,10 +5,53 @@ export async function runScheduleChecks({worker,env,origin}){
   // Recreate the serialized factory too: browser code cannot rely on module scope.
   const t=(new Function('return ('+createScheduleTools.toString()+')'))()();
   const players=n=>Array.from({length:n},(_,i)=>({id:'p'+i,name:String(i+1),points:160-i*5,type:'member',operator:false,lateRounds:0,lateRegistration:false}));
+  const allSplitGaps=points=>[
+    Math.abs(points[0]+points[1]-points[2]-points[3]),
+    Math.abs(points[0]+points[2]-points[1]-points[3]),
+    Math.abs(points[0]+points[3]-points[1]-points[2])
+  ];
+  const assertOptimalTeams=(rounds,roster)=>{const byName=new Map(roster.map(p=>[p.name,p]));
+    for(const round of rounds)if(round.method!=='random')for(const match of round.g){
+      const points=match.map(name=>Number(byName.get(name).points));
+      assert.equal(Math.abs(points[0]+points[1]-points[2]-points[3]),Math.min(...allSplitGaps(points)));
+    }
+  };
   const p=players(8);
   assert.deepEqual(t.generate(p,2,1,['same'])[0].g,[['1','4','2','3'],['5','8','6','7']]);
   assert.deepEqual(t.generate(p,2,1,['balanced'])[0].g,[['1','6','2','5'],['3','8','4','7']]);
   assert.deepEqual(t.generate(players(12),3,1,['balanced'])[0].g[2],['9','12','10','11']);
+  const quartet=[
+    {id:'jubam',name:'주밤',points:'116'},
+    {id:'asics',name:'아식스',points:'110'},
+    {id:'dujin',name:'두진',points:'97'},
+    {id:'sio',name:'시오',points:'104'}
+  ];
+  const permutations=(items)=>items.length<2?[items]:items.flatMap((item,i)=>permutations(items.filter((_,j)=>j!==i)).map(rest=>[item,...rest]));
+  for(const roster of permutations(quartet))for(const method of ['same','balanced']){
+    const made=t.generate(roster,1,1,[method]);
+    assert.deepEqual(made[0].g,[['주밤','두진','아식스','시오']]);
+    assertOptimalTeams(made,roster);
+  }
+  for(const values of [[168,143,109,22],[116,110,110,97],[105,105,105,105]])for(const method of ['same','balanced']){
+    const roster=values.map((points,i)=>({id:'irregular-'+i,name:'불규칙'+i,points}));
+    assertOptimalTeams(t.generate(roster,1,1,[method]),roster);
+  }
+  const addedCourt=[
+    {id:'ddugi',name:'뚜기',points:121},{id:'jubam',name:'주밤',points:116},
+    {id:'roto',name:'로토',points:109},{id:'solchan',name:'솔찬',points:71}
+  ];
+  assert.deepEqual(t.balanceFour(addedCourt,'same').map(p=>p.name),['뚜기','솔찬','주밤','로토']);
+  const addedCourt2=[
+    {id:'sio',name:'시오',points:104},{id:'gureum',name:'구름',points:90},
+    {id:'hooni',name:'후니',points:73},{id:'aman',name:'아만',points:70}
+  ];
+  assert.deepEqual(t.balanceFour(addedCourt2,'balanced').map(p=>p.name),['시오','아만','구름','후니']);
+  const tied=addedCourt.map((p,i)=>({...p,id:'tied-'+i,name:'동점'+i,points:'100'}));
+  assert.deepEqual(t.balanceFour(tied,'same',[tied]).map(p=>p.name),['동점0','동점2','동점1','동점3']);
+  assert.deepEqual(t.balanceFour(addedCourt,'random').map(p=>p.name),addedCourt.map(p=>p.name));
+  assert.throws(()=>t.balanceFour(addedCourt.slice(0,3),'same'),/4명 대진/);
+  assert.throws(()=>t.balanceFour(addedCourt,'other'),/라운드 방식/);
+  assert.throws(()=>t.balanceFour(addedCourt,'same',[addedCourt.slice(0,3)]),/이전 대진/);
   const roles=players(9);roles[0].lateRegistration=true;roles[1].type='guest';roles[2].operator=true;
   const rests=t.generate(roles,2,5,Array(5).fill('same')).map(r=>r.rest);
   assert.deepEqual(rests.slice(0,3),[['1'],['2'],['3']]);
@@ -63,13 +106,17 @@ export async function runScheduleChecks({worker,env,origin}){
       assert.equal(playing.length+r.rest.length+r.late.length,n);
       assert.ok(r.g.every(g=>g.length===4));
       for(const match of r.g){if(r.method==='random')continue;
-        const points=match.map(name=>roster.find(p=>p.name===name).points),sorted=[...points].sort((a,b)=>b-a);
-        const best=Math.min(Math.abs(sorted[0]+sorted[3]-sorted[1]-sorted[2]),Math.abs(sorted[0]+sorted[2]-sorted[1]-sorted[3]));
-        assert.equal(Math.abs(points[0]+points[1]-points[2]-points[3]),best);
+        const points=match.map(name=>roster.find(p=>p.name===name).points);
+        assert.equal(Math.abs(points[0]+points[1]-points[2]-points[3]),Math.min(...allSplitGaps(points)));
       }
     }
     for(const special of roster.slice(1,4))assert.ok(rounds.filter(r=>r.rest.includes(special.name)).length<=1);
   }
+  const afterRandomLate=players(9).map((p,i)=>({...p,points:[160,154,154,147,132,132,119,101,88][i],lateRounds:i===8?1:0,lateRegistration:i===8}));
+  const afterRandomLateRounds=t.generate(afterRandomLate,2,3,['random','same','same']);
+  assert.deepEqual(afterRandomLateRounds[0].late,['9']);
+  assert.deepEqual(afterRandomLateRounds.slice(1).map(r=>r.method),['same','same']);
+  assertOptimalTeams(afterRandomLateRounds,afterRandomLate);
   const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
   assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);
