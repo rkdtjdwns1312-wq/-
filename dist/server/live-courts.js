@@ -1,7 +1,22 @@
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const blank=()=>({names:['','','',''],state:'waiting'});
-const unpack=row=>{const data=row?JSON.parse(row.payload):{courts:[],queue:[]};return {...data,isOpen:data.isOpen===true,version:row?.version||0,updatedAt:row?.updated_at||null};};
-const visible=(data,editor)=>data.isOpen||editor?data:{...data,courts:[],queue:[]};
+const unpack=row=>{
+  const data=row?JSON.parse(row.payload):{courts:[],queue:[]};
+  // Backward-compatible reads preserve active games; registration is persisted on the next CAS write.
+  const fallback=row?.updated_at||new Date().toISOString(),participants=[],seen=new Set();
+  for(const person of Array.isArray(data.participants)?data.participants:[]){
+    if(typeof person?.name!=='string'||!person.name||seen.has(person.name))continue;
+    seen.add(person.name);participants.push({name:person.name,waitingSince:Number.isFinite(Date.parse(person.waitingSince))?person.waitingSince:fallback});
+  }
+  for(const name of [...data.courts,...data.queue].flatMap(group=>group.names).filter(Boolean)){
+    if(!seen.has(name)){seen.add(name);participants.push({name,waitingSince:fallback});}
+  }
+  return {...data,participants,isOpen:data.isOpen===true,version:row?.version||0,updatedAt:row?.updated_at||null};
+};
+const visible=(data,editor)=>({...((data.isOpen||editor)?data:{...data,courts:[],queue:[],participants:[]}),serverNow:new Date().toISOString()});
+const inputNames=input=>Array.isArray(input.names)?input.names:typeof input.name==='string'?[input.name]:[];
+const invalidNames=names=>!names.length||names.length>4||names.some(name=>typeof name!=='string'||!name.trim()||name.trim().length>40||/[\u0000-\u001f\u007f]/.test(name));
+const nameError='이름은 줄바꿈 없이 1~40자로, 한 번에 4명까지 입력해주세요.';
 const conflict=()=>json({error:'다른 사람이 먼저 변경했어요. 최신 코트를 확인한 뒤 다시 입력해주세요.',conflict:true},409);
 
 // This endpoint never reads or writes scoring, attendance or settlement tables.
@@ -13,29 +28,41 @@ export async function liveCourts(request,env){
     if(request.method==='GET')return json({data:visible(unpack(await env.DB.prepare('SELECT * FROM live_courts WHERE id=1').first()),editor)});
     const raw=await request.text();if(raw.length>2000)return json({error:'입력 내용이 너무 큽니다.'},413);
     let input;try{input=JSON.parse(raw);}catch{return json({error:'입력 내용을 확인해주세요.'},400);}
-    if(!input||!Number.isInteger(input.version)||input.version<0||!['create','open','close','join','leave','cancel','end'].includes(input.action))return json({error:'입력 내용을 확인해주세요.'},400);
+    if(!input||!Number.isInteger(input.version)||input.version<0||!['create','open','close','register','join','leave','cancel','end'].includes(input.action))return json({error:'입력 내용을 확인해주세요.'},400);
     if(['create','open','close'].includes(input.action)&&!editor)return json({error:'코트 생성과 실시간대진 열기·종료는 운영진만 할 수 있습니다.'},403);
     const row=await env.DB.prepare('SELECT * FROM live_courts WHERE id=1').first(),current=unpack(row);
     if(input.version!==current.version)return conflict();
     let courts=current.courts,queue=current.queue,isOpen=current.isOpen;
+    const participants=current.participants,at=new Date().toISOString();
+    const resetWaiting=names=>{for(const person of participants)if(names.includes(person.name))person.waitingSince=at;};
     if(input.action==='open'||input.action==='close'){
       isOpen=input.action==='open';
-      if(current.isOpen===isOpen)return json({data:current});
+      if(current.isOpen===isOpen)return json({data:visible(current,editor)});
     }else if(input.action==='create'){
       if(!Number.isInteger(input.count)||input.count<1||input.count>20)return json({error:'코트 수는 1~20개로 입력해주세요.'},400);
+      resetWaiting(courts.filter(c=>c.state==='playing').flatMap(c=>c.names));
       courts=Array.from({length:input.count},blank);
       queue=[];
     }else{
       if(!isOpen)return json({error:'실시간대진이 종료되어 입장하거나 변경할 수 없습니다. 운영진이 다시 열면 이용해주세요.',closed:true},409);
-      if(input.court==='queue'){
+      if(input.action==='register'){
+        const names=inputNames(input);
+        if(invalidNames(names))return json({error:nameError},400);
+        const clean=names.map(name=>name.trim());
+        if(new Set(clean).size!==clean.length)return json({error:'같은 이름을 한 번에 두 번 등록할 수 없습니다.'},409);
+        if(clean.some(name=>participants.some(p=>p.name===name)))return json({error:'이미 참가 명단에 등록된 이름입니다.'},409);
+        if(participants.length+clean.length>500)return json({error:'참가 명단은 최대 500명까지 등록할 수 있습니다.'},409);
+        participants.push(...clean.map(name=>({name,waitingSince:at})));
+      }else if(input.court==='queue'){
         if(!courts.length)return json({error:'운영진이 코트를 연 뒤 참가해주세요.'},400);
         if(input.action==='join'){
-          const names=Array.isArray(input.names)?input.names:typeof input.name==='string'?[input.name]:[];
-          if(!names.length||names.length>4||names.some(name=>typeof name!=='string'||!name.trim()||name.trim().length>40||/[\u0000-\u001f\u007f]/.test(name)))return json({error:'이름은 줄바꿈 없이 1~40자로, 한 번에 4명까지 입력해주세요.'},400);
+          const names=inputNames(input);
+          if(invalidNames(names))return json({error:nameError},400);
           const clean=names.map(name=>name.trim());
           if(new Set(clean).size!==clean.length)return json({error:'같은 이름을 한 번에 두 번 등록할 수 없습니다.'},409);
           if(clean.some(name=>courts.some(c=>c.names.includes(name))))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
           if(clean.some(name=>queue.some(g=>g.names.includes(name))))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
+          if(clean.some(name=>!participants.some(p=>p.name===name)))return json({error:'참가 명단에 먼저 등록한 회원만 선택할 수 있습니다.'},409);
           if(!queue.length&&courts.some(c=>c.state==='waiting'&&c.names.includes('')))return json({error:'빈자리가 있는 코트에 먼저 들어가주세요.'},409);
           let group;
           if(input.group!==undefined){if(!Number.isInteger(input.group)||!queue[input.group])return json({error:'대기중인 대진을 확인해주세요.'},400);group=queue[input.group];}
@@ -61,12 +88,13 @@ export async function liveCourts(request,env){
       if(!Number.isInteger(input.court)||!courts[input.court])return json({error:'코트를 먼저 생성하거나 최신 화면을 확인해주세요.'},400);
       const court=courts[input.court],full=()=>court.names.every(Boolean)&&new Set(court.names).size===4;
       if(input.action==='join'){
-        const names=Array.isArray(input.names)?input.names:typeof input.name==='string'?[input.name]:[];
-        if(!names.length||names.length>4||names.some(name=>typeof name!=='string'||!name.trim()||name.trim().length>40||/[\u0000-\u001f\u007f]/.test(name)))return json({error:'이름은 줄바꿈 없이 1~40자로, 한 번에 4명까지 입력해주세요.'},400);
+        const names=inputNames(input);
+        if(invalidNames(names))return json({error:nameError},400);
         const clean=names.map(name=>name.trim());
         if(new Set(clean).size!==clean.length)return json({error:'같은 이름을 한 번에 두 번 등록할 수 없습니다.'},409);
         if(clean.some(name=>courts.some(c=>c.names.includes(name))))return json({error:'현재 게임중인 회원입니다. 등록할 수 없습니다.'},409);
         if(clean.some(name=>queue.some(g=>g.names.includes(name))))return json({error:'이미 다음 대진에 등록된 이름입니다.'},409);
+        if(clean.some(name=>!participants.some(p=>p.name===name)))return json({error:'참가 명단에 먼저 등록한 회원만 선택할 수 있습니다.'},409);
         if(court.state!=='waiting')return json({error:'대기중인 코트에만 들어갈 수 있습니다.'},409);
         if(input.slot!==undefined){
           if(clean.length!==1||!Number.isInteger(input.slot)||input.slot<0||input.slot>3||court.names[input.slot])return json({error:'선택한 빈자리를 확인해주세요.'},409);
@@ -85,16 +113,17 @@ export async function liveCourts(request,env){
         courts[input.court]=blank();
       }else if(input.action==='end'){
         if(!full())return json({error:'네 명이 들어간 코트에서 대진을 종료해주세요.'},409);
+        resetWaiting(court.names);
         courts[input.court]=queue.length?{names:queue.shift().names,state:'waiting'}:blank();
       }
       }
     }
     for(const court of courts)court.state=court.names.every(Boolean)?'playing':'waiting';
-    const at=new Date().toISOString(),payload=JSON.stringify({courts,queue,isOpen});
+    const payload=JSON.stringify({courts,queue,isOpen,participants});
     const result=row
       ?await env.DB.prepare('UPDATE live_courts SET payload=?,version=version+1,updated_at=? WHERE id=1 AND version=?').bind(payload,at,input.version).run()
       :await env.DB.prepare('INSERT OR IGNORE INTO live_courts (id,payload,version,updated_at) VALUES (1,?,1,?)').bind(payload,at).run();
     if(!result.meta.changes)return conflict();
-    return json({data:visible({courts,queue,isOpen,version:current.version+1,updatedAt:at},editor)});
+    return json({data:visible({courts,queue,isOpen,participants,version:current.version+1,updatedAt:at},editor)});
   }catch(error){console.error('Live courts request failed',error);return json({error:'현재 코트를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
 }

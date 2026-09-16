@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 export async function runLiveCourtsChecks({worker,env,origin,db}){
   const path=origin+'/api/live-courts';
   const call=(body,editor=false)=>worker.fetch(new Request(path,{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json',...(editor?{'x-kokkiri-editor':env.EDITOR_KEY}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
-  async function read(editor=false){return (await (await call(undefined,editor)).json()).data;}
-  async function act(action,values={},editor=false){const before=await read(),r=await call({action,version:before.version,...values},editor),x=await r.json();assert.equal(r.status,200,JSON.stringify(x));return x.data;}
+  function stable(data){assert.ok(Number.isFinite(Date.parse(data.serverNow)),'server provides a clock reference');const {serverNow,...rest}=data;return rest;}
+  async function read(editor=false){return stable((await (await call(undefined,editor)).json()).data);}
+  async function act(action,values={},editor=false){const before=await read(),r=await call({action,version:before.version,...values},editor),x=await r.json();assert.equal(r.status,200,JSON.stringify(x));return stable(x.data);}
   async function rejectCourtDuplicate(court,name){
     const before=await read(true),r=await call({action:'join',version:before.version,court,name});
     assert.equal(r.status,409);
@@ -13,7 +14,7 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   }
   const snapshot=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes'].map(t=>[t,db.prepare('SELECT * FROM '+t).all()]));
   const original=snapshot();
-  assert.deepEqual(await read(),{version:0,courts:[],queue:[],isOpen:false,updatedAt:null});
+  assert.deepEqual(await read(),{version:0,courts:[],queue:[],participants:[],isOpen:false,updatedAt:null});
   for(const b of [null,{}, {version:0,action:'result',winner:'a'},{version:-1,action:'create'}])assert.equal((await call(b)).status,400);
   assert.equal((await worker.fetch(new Request(path,{method:'DELETE'}),env)).status,405);
   assert.equal((await call({version:0,action:'create',count:2})).status,403);
@@ -33,6 +34,9 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   assert.equal((await act('open',{},true)).version,d.version,'repeating the same open is idempotent');
   assert.deepEqual(d.courts[0],{names:['','','',''],state:'waiting'});
   assert.equal((await call({action:'end',version:d.version,court:0})).status,409);
+  // Legacy join regression fixtures are registered first; direct calls still test bypass rejection.
+  const fixtureNames=['한명','두명','세명','네명','첫칸','둘째칸','셋째칸','다시채움','자유 참가','다른 참가','셋','넷','동시 이름','다음 생성 때 초기화','닫힘 경합',...Array.from({length:4},(_,i)=>'두번째'+i),...Array.from({length:9},(_,i)=>'대기'+i)];
+  for(let i=0;i<fixtureNames.length;i+=4)d=await act('register',{names:fixtureNames.slice(i,i+4)});
   d=await act('join',{court:0,names:['한명','두명','세명','네명']});assert.deepEqual(d.courts[0].names,['한명','두명','세명','네명'],'up to four names join atomically');
   const beforeBatchDuplicate=await read(true),batchDuplicate=await call({version:d.version,action:'join',court:1,names:['중복','중복']});
   assert.equal(batchDuplicate.status,409);assert.deepEqual(await read(true),beforeBatchDuplicate,'duplicate names in one batch never partially save');
@@ -64,7 +68,7 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   const retained=JSON.stringify({courts:d.courts,queue:d.queue}),openVersion=d.version;
   d=await act('close',{},true);assert.equal(d.isOpen,false);
   assert.equal(JSON.stringify({courts:d.courts,queue:d.queue}),retained,'closing does not erase names or queued games');
-  const closedPublic=await read();assert.deepEqual(closedPublic.courts,[]);assert.deepEqual(closedPublic.queue,[]);
+  const closedPublic=await read();assert.deepEqual(closedPublic.courts,[]);assert.deepEqual(closedPublic.queue,[]);assert.deepEqual(closedPublic.participants,[]);
   for(const values of [{action:'join',court:0,name:'잠긴 입장'},{action:'join',court:'queue',name:'잠긴 대기'},{action:'leave',court:'queue',group:0,slot:0},{action:'end',court:0}])assert.equal((await call({version:d.version,...values})).status,409);
   assert.equal((await call({version:openVersion,action:'end',court:0})).status,409,'old open tabs cannot act after closure');
   assert.equal((await read(true)).version,d.version,'denied actions must not mutate the closed session');
@@ -94,7 +98,60 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   const closeRace=await Promise.all([call({version:d.version,action:'close'},true),call({version:d.version,action:'join',court:0,name:'닫힘 경합'})]);
   assert.deepEqual(closeRace.map(r=>r.status).sort(),[200,409],'closing and joining cannot overwrite each other');
   await act('close',{},true);d=await read(true);assert.equal(d.isOpen,false);
+  assert.equal((await call({version:d.version,action:'register',names:['닫힘등록']})).status,409);
+  d=await act('open',{},true);d=await act('create',{count:1},true);
+  const unregisteredBefore=await read(true);
+  for(const court of [0,'queue']){
+    const response=await call({version:d.version,action:'join',court,names:['미등록']});
+    assert.equal(response.status,409);assert.match((await response.json()).error,/참가 명단에 먼저/);
+    assert.deepEqual(await read(true),unregisteredBefore);
+  }
+  for(const names of [[],[''],['가\n나'],['가'.repeat(41)],['가','나','다','라','마'],[42]])assert.equal((await call({version:d.version,action:'register',names})).status,400);
+  assert.equal((await call({version:d.version,action:'register',names:['중복등록','중복등록']})).status,409);
+  d=await act('register',{names:['  시계가  ','시계나','시계다','시계라'],waitingSince:'2000-01-01T00:00:00.000Z'});
+  assert.equal(d.participants.find(p=>p.name==='시계가').waitingSince,d.updatedAt,'only server sets registration time');
+  d=await act('register',{names:['시계마','시계바','시계사','시계아']});
+  d=await act('register',{names:['시계자']});
+  const duplicateBefore=await read(true);
+  assert.equal((await call({version:d.version,action:'register',names:['시계가','새미저장']})).status,409);
+  assert.deepEqual(await read(true),duplicateBefore,'duplicate batch registration does not reset time or partially add');
+  const oldTime='2026-09-16T10:00:00.000Z',fixture=JSON.parse(db.prepare('SELECT payload FROM live_courts WHERE id=1').get().payload);
+  fixture.participants.forEach(p=>p.waitingSince=oldTime);
+  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify(fixture));
+  d=await act('join',{court:0,names:['시계가','시계나','시계다','시계라']});
+  assert.equal(d.courts[0].state,'playing');assert.ok(d.participants.every(p=>p.waitingSince===oldTime),'entering play does not reset stored waiting starts');
+  d=await act('join',{court:'queue',names:['시계마','시계바','시계사','시계아']});
+  d=await act('leave',{court:'queue',group:0,slot:3});
+  assert.equal(d.participants.find(p=>p.name==='시계아').waitingSince,oldTime,'queue leave preserves elapsed wait');
+  d=await act('join',{court:'queue',group:0,slot:3,names:['시계아']});
+  d=await act('end',{court:0});
+  assert.deepEqual(d.courts[0].names,['시계마','시계바','시계사','시계아']);
+  for(const name of ['시계가','시계나','시계다','시계라'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,d.updatedAt,'outgoing four return at game end');
+  for(const name of ['시계마','시계바','시계사','시계아','시계자'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,oldTime,'other waits are not reset');
+  assert.deepEqual(await read(),d,'reload preserves exact waiting starts');
+  const preservedTimes=d.participants;
+  await act('close',{},true);d=await act('open',{},true);assert.deepEqual(d.participants,preservedTimes);
+  d=await act('create',{count:1},true);
+  for(const name of ['시계마','시계바','시계사','시계아'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,d.updatedAt,'cleared active games return to waiting');
+  assert.equal(d.participants.find(p=>p.name==='시계자').waitingSince,oldTime);
+  d=await act('join',{court:0,names:['시계자']});d=await act('cancel',{court:0});
+  assert.equal(d.participants.find(p=>p.name==='시계자').waitingSince,oldTime,'cancelled partial game does not reset wait');
+  const registrationRace=await Promise.all([call({version:d.version,action:'register',names:['경합등록']}),call({version:d.version,action:'register',names:['경합등록']})]);
+  assert.deepEqual(registrationRace.map(r=>r.status).sort(),[200,409]);
+  // Old populated JSON upgrades without losing games, queue position, version or stable fallback time.
+  const legacy={courts:[{names:['이전가','이전나','이전다','이전라'],state:'playing'}],queue:[{names:['이전마','','','']}],isOpen:true};
+  db.prepare('UPDATE live_courts SET payload=?,updated_at=? WHERE id=1').run(JSON.stringify(legacy),oldTime);
+  d=await read();assert.deepEqual(d.courts,legacy.courts);assert.deepEqual(d.queue,legacy.queue);assert.equal(d.participants.length,5);assert.ok(d.participants.every(p=>p.waitingSince===oldTime));
+  assert.deepEqual(await read(),d,'legacy fallback does not restart every poll');
+  d=await act('register',{names:['신규가']});
+  assert.equal(JSON.parse(db.prepare('SELECT payload FROM live_courts WHERE id=1').get().payload).participants.length,6,'next successful CAS persists upgraded registry');
+  const capacity=JSON.parse(db.prepare('SELECT payload FROM live_courts WHERE id=1').get().payload);
+  while(capacity.participants.length<500)capacity.participants.push({name:'한도'+capacity.participants.length,waitingSince:oldTime});
+  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify(capacity));
+  assert.equal((await call({version:d.version,action:'register',names:['한도초과']})).status,409);
+  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify({...legacy,participants:d.participants}));
+  await act('close',{},true);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_courts').get().n,1,'only current state, no match history');
   assert.equal(snapshot(),original,'free courts must never change saved schedules, people, points or histories');
-  console.log('PASS: free courts operator-only open/close, closed gate, retained names, duplicate-name message/races/re-entry, FIFO and zero scoring effects.');
+  console.log('PASS: free courts registered-only joins, shared waiting timestamps/end reset, legacy preservation, registration races/capacity, operator gate, FIFO and zero scoring effects.');
 }
