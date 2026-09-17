@@ -113,10 +113,11 @@ async function checkPickerLocalNamesAndNavigation(){
       crypto:{randomUUID:()=> 'new'},scheduleTools:{generate(value){roster.push(...value);return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
     });
     await openPicker({id:'draft',participantIds:people.map(p=>p.id),names:['중복 (회원)','중복 (게스트)','A','B','C'],courts:1,rounds:1,absent:[]});
-    assert.match(h.dialog.innerHTML,/동일과 인접은 함께 팀 동반 중복을 먼저 피하고, 다음으로 팀 점수 균형을 맞춥니다\./,'picker help must explain the same and 인접 partner-repeat priority');
-    assert.match(h.dialog.innerHTML,/같은 라운드의 코트를 함께 조정해 중복을 줄이며, 휴식·늦참은 바꾸지 않습니다\./,'picker help must explain same-round court adjustment without changing rest or late participation');
-    assert.match(h.dialog.innerHTML,/랜덤은 이 중복 확인에서 제외됩니다\./,'picker help must explain that random rounds are excluded from partner-repeat checks');
-    assert.match(h.dialog.innerHTML,/인원이 부족하면 팀 동반이 다시 겹칠 수 있어요\./,'picker help must explain that limited players can require repeated partners');
+    assert.match(h.dialog.innerHTML,/동일은 휴식·늦참을 뺀 뒤 점수순 4명씩 고정으로 묶고, 동일 라운드 회차마다 1·4 vs 2·3 → 1·3 vs 2·4 → 1·2 vs 3·4 팀 조합을 순환합니다\./,'picker help must explain same rank blocks and its three-team cycle');
+    assert.match(h.dialog.innerHTML,/동일의 고정 묶음·팀은 중복 후처리로 바꾸지 않습니다\./,'picker help must not promise partner-repeat repair for fixed same teams');
+    assert.match(h.dialog.innerHTML,/같은 라운드 인접 코트끼리만 조정합니다\./,'picker help must limit cross-court repair to adjacent courts');
+    assert.match(h.dialog.innerHTML,/인접은 비랜덤 경기의 팀 동반 중복을 먼저 줄이고, 동률이면 팀 점수 균형을 맞춥니다\./,'picker help must state the adjacent-round repeat-first, tie-only balance priority');
+    assert.match(h.dialog.innerHTML,/조건상 남는 팀 동반 반복은 그대로 안내합니다\./,'picker help must honestly report repeats that remain after permitted repair');
     await h.$('generate').onclick();
     assert.deepEqual(roster.map(person=>person.name),['중복 (회원)','중복 (게스트)','A','B','C'],'the generated roster must use the picker-local duplicate-name labels');
   }
@@ -186,6 +187,33 @@ async function checkAddedCourtBalance(){
     assert.deepEqual(draft.schedule[1].g,[['가','라','나','다']],'a random-round partner history must not influence an added same court');
   }
   {
+    const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'same-cycle-'+i,name,points}));
+    const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
+    const draft={id:'future-same',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('same'),round('same')]};
+    const h=make(draft);h.setRead(async()=>partnerMembers);
+    await h.addBalancedCourt(0);
+    assert.deepEqual(draft.schedule[0].g,[['가','라','나','다']],'an added court in an earlier same round uses that round\'s first cycle, ignoring later same rounds');
+    assert.deepEqual(draft.schedule[1].g,[],'adding an earlier same court must not alter a later same round');
+  }
+  {
+    const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'same-cycle-'+i,name,points}));
+    const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
+    const draft={id:'second-same',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('same'),round('same')]};
+    const h=make(draft);h.setRead(async()=>partnerMembers);
+    await h.addBalancedCourt(1);
+    assert.deepEqual(draft.schedule[1].g,[['가','다','나','라']],'an added court in a later same round uses the count of earlier same rounds');
+  }
+  {
+    const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'same-cycle-'+i,name,points}));
+    const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
+    const draft={id:'third-interleaved-same',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('same'),round('random'),round('same'),round('balanced'),round('same'),round('same')]};
+    const h=make(draft);h.setRead(async()=>partnerMembers);
+    await h.addBalancedCourt(4);
+    assert.deepEqual(draft.schedule[4].g,[['가','나','다','라']],'a third same round counts only earlier same rounds when random and balanced rounds are interleaved');
+    await h.addBalancedCourt(4);
+    assert.deepEqual(draft.schedule[4].g,[['가','나','다','라'],['가','나','다','라']],'adding a second court to one same round must not advance the same-round cycle');
+  }
+  {
     const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'partner-'+i,name,points}));
     const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
     const draft={id:'later-history',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('balanced'),round('same',[['가','라','나','다']]) ]};
@@ -206,8 +234,8 @@ async function checkAddedCourtBalance(){
 function checkPartnerSummaryDisplay(){
   const d={names:[],schedule:[]};
   const render=summary=>compile('scheduleHTML',{scheduleTools:{availableNames:()=>[],matchState:()=> 'waiting',partnerSummary:()=>summary},esc,nameHTML:esc,viewRound:1});
-  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/동일·인접 경기의 팀 파트너 중복이 없습니다\./,'editing schedule must show the no-duplicate partner summary');
-  assert.match(render({duplicateTeams:2,pairs:[]})(d,true),/팀 파트너 중복 2건이 남았습니다\. 참가 인원·라운드 수 또는 편성 조건에 따라 중복이 남을 수 있습니다\./,'editing schedule must show the remaining partner-duplicate count without claiming it is impossible to resolve');
+  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/팀 파트너 중복이 없습니다\. 동일은 점수순 고정 4인 묶음과 회차별 팀 조합을 유지합니다\./,'editing schedule must explain fixed same blocks even without repeats');
+  assert.match(render({duplicateTeams:2,pairs:[]})(d,true),/팀 파트너 중복 2건이 남았습니다\. 동일의 고정 4인 묶음·팀은 유지하며, 인접 코트끼리만 조정한 뒤에도 참가 인원·라운드 수에 따라 반복이 남을 수 있습니다\./,'editing schedule must honestly retain repeats outside permitted adjacent-court repair');
 }
 
 async function checkSettlementVersions(){

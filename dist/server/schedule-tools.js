@@ -18,10 +18,18 @@ export function createScheduleTools(){
     };}).sort((a,b)=>method==='random'?0:a.duplicates-b.duplicates||a.repeats-b.repeats||a.gap-b.gap);
     return choices[0].players;
   }
-  function balanceFour(roster4,method,previousMatches=[]){
+  // Same-seed rounds keep score-neighbour quartets and rotate exactly three
+  // prescribed teams. Equal scores keep input roster order (stable sort).
+  function sameFour(roster4,sameIndex){
+    const sorted=[...roster4].sort((a,b)=>pts(b)-pts(a));
+    return [[0,3,1,2],[0,2,1,3],[0,1,2,3]][sameIndex%3].map(i=>sorted[i]);
+  }
+  function balanceFour(roster4,method,previousMatches=[],sameIndex=0){
     if(!Array.isArray(roster4)||roster4.length!==4||roster4.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(roster4.map(p=>p.id)).size!==4||new Set(roster4.map(p=>p.name)).size!==4)throw Error('4명 대진 참가자 정보를 확인해주세요.');
     if(!['same','balanced','random'].includes(method))throw Error('라운드 방식을 확인해주세요.');
     if(!Array.isArray(previousMatches)||previousMatches.some(match=>!Array.isArray(match)||match.length!==4||match.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(match.map(p=>p.id)).size!==4||new Set(match.map(p=>p.name)).size!==4))throw Error('이전 대진 정보를 확인해주세요.');
+    if(!Number.isInteger(sameIndex)||sameIndex<0)throw Error('동일 경기 순서를 확인해주세요.');
+    if(method==='same')return sameFour(roster4,sameIndex);
     const pairCount=new Map();
     previousMatches.forEach(match=>addPartnerCounts(pairCount,match));
     return chooseFour(roster4,method,pairCount);
@@ -45,7 +53,8 @@ export function createScheduleTools(){
     const pairs=[...counts.values()].filter(p=>p.count>1);
     return {duplicateTeams:pairs.reduce((n,p)=>n+p.count-1,0),pairs};
   }
-  // Revisit the entire generated draft, not just the partners of earlier rounds.
+  // Count the entire scored draft, including fixed same-seed partners, but only
+  // repair adjacent rounds. Same-seed quartets and their rotation stay locked.
   // Bounded search keeps large (200-player/20-round) drafts responsive. Every
   // accepted change improves duplicates, repeat concentration, then team balance.
   function repairPartners(schedule,roster){
@@ -66,9 +75,11 @@ export function createScheduleTools(){
       return [duplicates,repeats,gap(a)+(b?gap(b):0)];
     };
     for(const [ri,round] of schedule.entries())if(round.method!=='random')for(const [mi,match] of round.g.entries()){
-      const m=match.map(name=>byName.get(name));entries.push({ri,mi,m});add(m,1);
+      const m=match.map(name=>byName.get(name));
+      add(m,1);
+      if(round.method==='balanced')entries.push({ri,mi,m});
     }
-    if(entries.length<2)return;
+    if(!entries.length)return;
     const repeated=e=>keys(e.m).some(k=>counts[k]>1);
     const sweep=()=>{
       let changed=false;
@@ -144,7 +155,7 @@ export function createScheduleTools(){
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
     const restCount=new Map(roster.map(p=>[p.id,0])),pairCount=new Map();
-    const out=[];
+    const out=[];let sameIndex=0;
     for(let ri=0;ri<rounds;ri++){
       const available=roster.filter(p=>(Number(p.lateRounds)||0)<=ri);
       const late=roster.filter(p=>(Number(p.lateRounds)||0)>ri).map(p=>p.name);
@@ -161,7 +172,7 @@ export function createScheduleTools(){
       if(method==='random'){
         const sorted=shuffle(playing);for(let i=0;i<sorted.length;i+=4)groups.push(sorted.slice(i,i+4));
       }else{
-        const sorted=shuffle(playing).sort((a,b)=>pts(b)-pts(a));
+        const sorted=(method==='same'?[...playing]:shuffle(playing)).sort((a,b)=>pts(b)-pts(a));
         for(let i=0;i<sorted.length;){
           if(method==='balanced'&&sorted.length-i>=8){
             groups.push([sorted[i],sorted[i+1],sorted[i+4],sorted[i+5]],[sorted[i+2],sorted[i+3],sorted[i+6],sorted[i+7]]);i+=8;
@@ -169,11 +180,12 @@ export function createScheduleTools(){
         }
       }
       const g=groups.map(group=>{
-        const s=chooseFour(group,method,pairCount);
+        const s=method==='same'?sameFour(group,sameIndex):chooseFour(group,method,pairCount);
         if(method!=='random')addPartnerCounts(pairCount,s);
         return s.map(p=>p.name);
       });
       out.push({round:ri+1,method,g,rest:resting.map(p=>p.name),late});
+      if(method==='same')sameIndex++;
     }
     repairPartners(out,roster);
     return out;

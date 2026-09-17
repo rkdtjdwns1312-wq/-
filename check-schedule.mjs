@@ -25,16 +25,28 @@ export async function runScheduleChecks({worker,env,origin}){
     return [[...counts.values()].reduce((a,n)=>a+Math.max(0,n-1),0),[...counts.values()].reduce((a,n)=>a+n*(n-1)/2,0),gap];
   };
   const less=(a,b)=>a[0]<b[0]||a[0]===b[0]&&(a[1]<b[1]||a[1]===b[1]&&a[2]<b[2]);
-  // Balance is now secondary to partner uniqueness across the entire draft.
+  // Only adjacent rounds may be repaired; same rounds have prescribed teams.
   const assertNoBetterSingleSplit=(rounds,roster)=>{
     const baseline=objective(rounds,roster);
-    for(const r of rounds)if(r.method!=='random')for(let mi=0;mi<r.g.length;mi++){
+    for(const r of rounds)if(r.method==='balanced')for(let mi=0;mi<r.g.length;mi++){
       const original=r.g[mi];
       for(const indices of [[0,2,1,3],[0,3,1,2]]){
         r.g[mi]=indices.map(i=>original[i]);
         assert.ok(!less(objective(rounds,roster),baseline),'a single team change cannot improve repeats, then balance');
       }
       r.g[mi]=original;
+    }
+  };
+  const assertSameRotation=(rounds,roster)=>{
+    let sameIndex=0;
+    for(const r of rounds)if(r.method==='same'){
+      const playing=roster.filter(p=>!r.rest.includes(p.name)&&!r.late.includes(p.name))
+        .sort((a,b)=>Number(b.points)-Number(a.points));
+      const indices=[[0,3,1,2],[0,2,1,3],[0,1,2,3]][sameIndex%3],expected=[];
+      assert.equal(playing.length%4,0,'select rests before making score-ranked quartets');
+      for(let i=0;i<playing.length;i+=4)expected.push(indices.map(j=>playing[i+j].name));
+      assert.deepEqual(r.g,expected,'same rounds preserve ranked quartets and the exact occurrence-based rotation');
+      sameIndex++;
     }
   };
   const p=players(8);
@@ -68,7 +80,15 @@ export async function runScheduleChecks({worker,env,origin}){
   ];
   assert.deepEqual(t.balanceFour(addedCourt2,'balanced').map(p=>p.name),['시오','아만','구름','후니']);
   const tied=addedCourt.map((p,i)=>({...p,id:'tied-'+i,name:'동점'+i,points:'100'}));
-  assert.deepEqual(t.balanceFour(tied,'same',[tied]).map(p=>p.name),['동점0','동점2','동점1','동점3']);
+  assert.deepEqual(t.balanceFour(tied,'same',[tied]).map(p=>p.name),['동점0','동점3','동점1','동점2']);
+  assert.deepEqual(t.balanceFour(tied,'same',[tied],1).map(p=>p.name),['동점0','동점2','동점1','동점3']);
+  assert.deepEqual(t.balanceFour(tied,'same',[tied],2).map(p=>p.name),tied.map(p=>p.name));
+  assert.deepEqual(t.balanceFour(tied,'same',[tied],3).map(p=>p.name),['동점0','동점3','동점1','동점2']);
+  for(const index of [-1,1.5,NaN,Infinity,'1'])assert.throws(()=>t.balanceFour(tied,'same',[],index),/동일 경기 순서/);
+  for(const roster of permutations(quartet))for(let i=0;i<6;i++){
+    const sorted=[...roster].sort((a,b)=>Number(b.points)-Number(a.points));
+    assert.deepEqual(t.balanceFour(roster,'same',[roster],i),[[0,3,1,2],[0,2,1,3],[0,1,2,3]][i%3].map(j=>sorted[j]));
+  }
   assert.deepEqual(t.balanceFour(addedCourt,'random').map(p=>p.name),addedCourt.map(p=>p.name));
   assert.throws(()=>t.balanceFour(addedCourt.slice(0,3),'same'),/4명 대진/);
   assert.throws(()=>t.balanceFour(addedCourt,'other'),/라운드 방식/);
@@ -77,16 +97,32 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.equal(t.partnerSummary(quartetRounds).duplicateTeams,0,'same and adjacent share a single partner history');
   assert.equal(new Set(quartetRounds.flatMap(r=>r.g.flatMap(g=>[g.slice(0,2),g.slice(2)].map(team=>JSON.stringify([...team].sort()))))).size,6);
   assert.equal(t.partnerSummary(t.generate(players(4),1,4,Array(4).fill('same'))).duplicateTeams,2,'four players in four rounds must repeat two teams');
-  const cross=t.generate(players(8),2,7,Array(7).fill('same'));
+  const sameCycle=t.generate(players(8),2,8,Array(8).fill('same'));
+  assertSameRotation(sameCycle,players(8));
+  assert.deepEqual(sameCycle.slice(0,3).map(r=>r.g),[
+    [['1','4','2','3'],['5','8','6','7']],
+    [['1','3','2','4'],['5','7','6','8']],
+    [['1','2','3','4'],['5','6','7','8']]
+  ]);
+  assert.deepEqual(sameCycle[3].g,sameCycle[0].g,'fourth same round restarts the cycle');
+  assert.equal(t.partnerSummary(sameCycle).duplicateTeams,20,'fixed quartets can repeat; do not trade courts to hide repeats');
+  const cross=t.generate(players(8),2,7,Array(7).fill('balanced'));
   assert.equal(t.partnerSummary(cross).duplicateTeams,0,'cross-court search finds all seven different partners for eight players');
-  assert.ok(cross.some(r=>r.g.some(g=>g.some(n=>Number(n)<=4)&&g.some(n=>Number(n)>4))),'cross-court exchange is actually exercised');
+  const adjacentFirst=new Set(['1','2','5','6']);
+  assert.ok(cross.some(r=>r.g.some(g=>g.some(n=>adjacentFirst.has(n))&&g.some(n=>!adjacentFirst.has(n)))),'adjacent cross-court exchange is actually exercised');
   for(const r of cross)assert.deepEqual([...r.g.flat()].sort(),players(8).map(p=>p.name).sort());
-  assert.equal(t.partnerSummary(t.generate(players(8),2,8,Array(8).fill('same'))).duplicateTeams,4,'unavoidable eight-round repeats are reported honestly');
+  assert.equal(t.partnerSummary(t.generate(players(8),2,8,Array(8).fill('balanced'))).duplicateTeams,4,'unavoidable adjacent eight-round repeats are reported honestly');
   assert.deepEqual(t.partnerSummary([{method:'same',g:[['a','b','c','d']]},{method:'random',g:[['a','b','c','d']]},{method:'balanced',g:[['b','a','d','c']]}]),{duplicateTeams:2,pairs:[{names:['a','b'],count:2},{names:['c','d'],count:2}]});
   const withRandom=t.generate(players(4),1,4,['random','same','balanced','same']);
   assert.deepEqual(withRandom.slice(1).map(r=>r.g),quartetRounds.map(r=>r.g),'random partners must never penalize later scored teams');
   assert.equal(t.partnerSummary(withRandom).duplicateTeams,0);
   assertNoBetterSingleSplit(cross,players(8));
+  const mixedMethods=['random','same','balanced','same','random','balanced','same','same'];
+  const mixed=t.generate(players(12),3,mixedMethods.length,mixedMethods);
+  assertSameRotation(mixed,players(12));
+  const mixedFour=t.generate(players(4),1,3,['same','balanced','same']);
+  assertSameRotation(mixedFour,players(4));
+  assert.deepEqual(mixedFour[1].g,[['1','2','3','4']],'a single adjacent match repairs around fixed same partners');
   const roles=players(9);roles[0].lateRegistration=true;roles[1].type='guest';roles[2].operator=true;
   const rests=t.generate(roles,2,5,Array(5).fill('same')).map(r=>r.rest);
   assert.deepEqual(rests.slice(0,3),[['1'],['2'],['3']]);
@@ -125,6 +161,7 @@ export async function runScheduleChecks({worker,env,origin}){
     const methods=Array.from({length:rounds},(_,ri)=>['random','same','balanced'][(trial+ri)%3]);
     const made=t.generate(roster,courts,rounds,methods);
     assert.equal(made.length,rounds);
+    assertSameRotation(made,roster);
     for(const r of made){const playing=r.g.flat();
       assert.ok(r.g.every(match=>match.length===4&&new Set(match).size===4));
       assert.equal(new Set(playing).size,playing.length);
@@ -142,6 +179,7 @@ export async function runScheduleChecks({worker,env,origin}){
       assert.ok(r.g.every(g=>g.length===4));
     }
     assertNoBetterSingleSplit(rounds,roster);
+    assertSameRotation(rounds,roster);
     for(const special of roster.slice(1,4))assert.ok(rounds.filter(r=>r.rest.includes(special.name)).length<=1);
   }
   const afterRandomLate=players(9).map((p,i)=>({...p,points:[160,154,154,147,132,132,119,101,88][i],lateRounds:i===8?1:0,lateRegistration:i===8}));
@@ -149,6 +187,18 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.deepEqual(afterRandomLateRounds[0].late,['9']);
   assert.deepEqual(afterRandomLateRounds.slice(1).map(r=>r.method),['same','same']);
   assertNoBetterSingleSplit(afterRandomLateRounds,afterRandomLate);
+  assertSameRotation(afterRandomLateRounds,afterRandomLate);
+  const stableTies=players(12).map(p=>({...p,points:'100'}));
+  const stableSnapshot=JSON.stringify(stableTies);
+  for(const seed of [1,2,3,123456])withSeed(seed,()=>assertSameRotation(t.generate(stableTies,3,6,Array(6).fill('same')),stableTies));
+  assert.equal(JSON.stringify(stableTies),stableSnapshot,'sorting/rotation cannot mutate roster input');
+  const changing=players(13);changing[0].lateRounds=2;
+  changing[1].lateRegistration=true;changing[2].type='guest';changing[3].operator=true;
+  const changingRounds=t.generate(changing,3,6,['same','random','same','balanced','same','same']);
+  assertSameRotation(changingRounds,changing);
+  for(const r of changingRounds.slice(0,2))assert.ok(!r.g.flat().includes('1'));
+  const bigRoster=players(200);
+  assertSameRotation(t.generate(bigRoster,20,20,Array(20).fill('same')),bigRoster);
   const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
   assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);
@@ -184,6 +234,7 @@ export async function runScheduleChecks({worker,env,origin}){
   const saved=(await (await call('/api/posts/schedule-ui-test')).json()).data;
   assert.deepEqual(saved.lateRounds,data.lateRounds);assert.deepEqual(saved.lateRegistration,data.lateRegistration);
   assert.deepEqual(saved.schedule.map(r=>r.method),['same','balanced','random','same','balanced']);
+  assertSameRotation(saved.schedule,roster);
   assert.ok(saved.schedule.slice(0,2).every(r=>r.late.includes(roster[0].name)&&!r.rest.includes(roster[0].name)));
   const edited=structuredClone(saved),other=[...edited.schedule[0].g[1]];
   t.replacePlayer(edited,0,0,0,other[0]);
@@ -200,5 +251,5 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.equal(scored.find(p=>p.name===names[1]).attendance,1);
   const noGames={...noArrival,rounds:2,names:names.slice(0,4),participantIds:roster.slice(0,4).map(p=>p.id),lateRounds:Object.fromEntries(names.slice(0,4).map(n=>[n,1])),schedule:[{g:[],method:'same'},{g:[names.slice(0,4)],method:'balanced'}],results:{}};
   assert.equal((await call('/api/posts/late-empty-test','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:noGames})).status,200);
-  console.log('PASS: late arrival persistence/exclusion, rest priority and limits, balanced teams, single-slot edits, duplicate games and late attendance.');
+  console.log('PASS: ranked same quartets with exact three-team rotation, adjacent-only partner repair, late/rest rules, single-slot edits and saved schedule preservation.');
 }
