@@ -113,6 +113,10 @@ async function checkPickerLocalNamesAndNavigation(){
       crypto:{randomUUID:()=> 'new'},scheduleTools:{generate(value){roster.push(...value);return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
     });
     await openPicker({id:'draft',participantIds:people.map(p=>p.id),names:['중복 (회원)','중복 (게스트)','A','B','C'],courts:1,rounds:1,absent:[]});
+    assert.match(h.dialog.innerHTML,/동일과 인접은 함께 팀 동반 중복을 먼저 피하고, 다음으로 팀 점수 균형을 맞춥니다\./,'picker help must explain the same and 인접 partner-repeat priority');
+    assert.match(h.dialog.innerHTML,/같은 라운드의 코트를 함께 조정해 중복을 줄이며, 휴식·늦참은 바꾸지 않습니다\./,'picker help must explain same-round court adjustment without changing rest or late participation');
+    assert.match(h.dialog.innerHTML,/랜덤은 이 중복 확인에서 제외됩니다\./,'picker help must explain that random rounds are excluded from partner-repeat checks');
+    assert.match(h.dialog.innerHTML,/인원이 부족하면 팀 동반이 다시 겹칠 수 있어요\./,'picker help must explain that limited players can require repeated partners');
     await h.$('generate').onclick();
     assert.deepEqual(roster.map(person=>person.name),['중복 (회원)','중복 (게스트)','A','B','C'],'the generated roster must use the picker-local duplicate-name labels');
   }
@@ -159,10 +163,10 @@ async function checkLatestDrawPoints(){
 
 async function checkAddedCourtBalance(){
   const members=[['주밤',116],['아식스',110],['두진',97],['시오',104]].map(([name,points],i)=>({id:'extra-'+i,name,points}));
-  const fixture=()=>({id:'local-extra',operation:'original',names:members.map(p=>p.name),participantIds:members.map(p=>p.id),schedule:[{method:'same',g:[members.map(p=>p.name)],rest:[]}]});
-  const make=()=>{
+  const fixture=()=>({id:'local-extra',operation:'original',names:members.map(p=>p.name),participantIds:members.map(p=>p.id),schedule:[{method:'same',g:[members.map(p=>p.name)],rest:[]}],results:{'0-0':'a'}});
+  const make=(initial=fixture())=>{
     const messages=[],paint={innerHTML:''};let read=async()=>members;
-    const scope={initial:fixture(),scheduleTools:createScheduleTools(),getPeople:()=>read(),alert:text=>messages.push(text),message:text=>messages.push(text),$:()=>paint,scheduleHTML:()=>'<updated/>'};
+    const scope={initial,scheduleTools:createScheduleTools(),getPeople:()=>read(),alert:text=>messages.push(text),message:text=>messages.push(text),$:()=>paint,scheduleHTML:()=>'<updated/>'};
     const h=new Function(...Object.keys(scope),'let draft=initial,routeToken=1,saving=false,addingCourt=false;function changed(){draft.operation="changed";}'+actual('addBalancedCourt')+';return {addBalancedCourt,current:()=>draft,navigate(){draft=null;routeToken++;}};')(...Object.values(scope));
     return {...h,messages,paint,setRead(fn){read=fn;}};
   };
@@ -170,7 +174,24 @@ async function checkAddedCourtBalance(){
     const h=make(),d=h.current();d.schedule[0].method=method;const original=structuredClone(d.schedule[0].g[0]);
     await h.addBalancedCourt(0);
     assert.deepEqual(d.schedule[0].g[0],original,'adding a court does not reorder a manually chosen existing team');
-    assert.deepEqual(d.schedule[0].g[1],['주밤','두진','아식스','시오'],'new court uses optimal teams instead of taking the first two as one team');
+    assert.deepEqual(d.results,{'0-0':'a'},'adding a court does not alter a recorded existing game');
+    assert.deepEqual(d.schedule[0].g[1],['주밤','두진','아식스','시오'],'a repeated same-four history changes only the added court to different partner teams');
+  }
+  {
+    const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'partner-'+i,name,points}));
+    const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
+    const draft={id:'random-history',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('random',[['가','라','나','다']]),round('same')]};
+    const h=make(draft);h.setRead(async()=>partnerMembers);
+    await h.addBalancedCourt(1);
+    assert.deepEqual(draft.schedule[1].g,[['가','라','나','다']],'a random-round partner history must not influence an added same court');
+  }
+  {
+    const partnerMembers=[['가',100],['나',99],['다',98],['라',97]].map(([name,points],i)=>({id:'partner-'+i,name,points}));
+    const round=(method,g=[],rest=partnerMembers.map(p=>p.name))=>({method,g,rest});
+    const draft={id:'later-history',operation:'original',names:partnerMembers.map(p=>p.name),participantIds:partnerMembers.map(p=>p.id),schedule:[round('balanced'),round('same',[['가','라','나','다']]) ]};
+    const h=make(draft);h.setRead(async()=>partnerMembers);
+    await h.addBalancedCourt(0);
+    assert.deepEqual(draft.schedule[0].g,[['가','다','나','라']],'a later non-random round must prevent repeated partners in an added balanced court');
   }
   for(const scenario of ['closed','edited','failure']){
     const h=make(),d=h.current(),read=deferred();let calls=0;h.setRead(()=>{calls++;return read.promise;});
@@ -180,6 +201,13 @@ async function checkAddedCourtBalance(){
     await pending;assert.equal(d.schedule[0].g.length,1,'stale or failed extra court read must not modify the draft');
     if(scenario!=='closed')assert.ok(h.messages.length);
   }
+}
+
+function checkPartnerSummaryDisplay(){
+  const d={names:[],schedule:[]};
+  const render=summary=>compile('scheduleHTML',{scheduleTools:{availableNames:()=>[],matchState:()=> 'waiting',partnerSummary:()=>summary},esc,nameHTML:esc,viewRound:1});
+  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/동일·인접 경기의 팀 파트너 중복이 없습니다\./,'editing schedule must show the no-duplicate partner summary');
+  assert.match(render({duplicateTeams:2,pairs:[]})(d,true),/팀 파트너 중복 2건이 남았습니다\. 참가 인원·라운드 수 또는 편성 조건에 따라 중복이 남을 수 있습니다\./,'editing schedule must show the remaining partner-duplicate count without claiming it is impossible to resolve');
 }
 
 async function checkSettlementVersions(){
@@ -263,6 +291,7 @@ export async function runClientAuditChecks(){
   await checkPickerLocalNamesAndNavigation();
   await checkLatestDrawPoints();
   await checkAddedCourtBalance();
+  checkPartnerSummaryDisplay();
   await checkSettlementVersions();
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();

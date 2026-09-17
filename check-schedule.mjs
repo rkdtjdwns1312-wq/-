@@ -16,6 +16,27 @@ export async function runScheduleChecks({worker,env,origin}){
       assert.equal(Math.abs(points[0]+points[1]-points[2]-points[3]),Math.min(...allSplitGaps(points)));
     }
   };
+  const objective=(rounds,roster)=>{
+    const counts=new Map(),byName=new Map(roster.map(p=>[p.name,Number(p.points)]));let gap=0;
+    for(const r of rounds)if(r.method!=='random')for(const g of r.g){
+      for(const team of [g.slice(0,2),g.slice(2)]){const key=JSON.stringify([...team].sort());counts.set(key,(counts.get(key)||0)+1);}
+      gap+=Math.abs(byName.get(g[0])+byName.get(g[1])-byName.get(g[2])-byName.get(g[3]));
+    }
+    return [[...counts.values()].reduce((a,n)=>a+Math.max(0,n-1),0),[...counts.values()].reduce((a,n)=>a+n*(n-1)/2,0),gap];
+  };
+  const less=(a,b)=>a[0]<b[0]||a[0]===b[0]&&(a[1]<b[1]||a[1]===b[1]&&a[2]<b[2]);
+  // Balance is now secondary to partner uniqueness across the entire draft.
+  const assertNoBetterSingleSplit=(rounds,roster)=>{
+    const baseline=objective(rounds,roster);
+    for(const r of rounds)if(r.method!=='random')for(let mi=0;mi<r.g.length;mi++){
+      const original=r.g[mi];
+      for(const indices of [[0,2,1,3],[0,3,1,2]]){
+        r.g[mi]=indices.map(i=>original[i]);
+        assert.ok(!less(objective(rounds,roster),baseline),'a single team change cannot improve repeats, then balance');
+      }
+      r.g[mi]=original;
+    }
+  };
   const p=players(8);
   assert.deepEqual(t.generate(p,2,1,['same'])[0].g,[['1','4','2','3'],['5','8','6','7']]);
   assert.deepEqual(t.generate(p,2,1,['balanced'])[0].g,[['1','6','2','5'],['3','8','4','7']]);
@@ -52,6 +73,20 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.throws(()=>t.balanceFour(addedCourt.slice(0,3),'same'),/4명 대진/);
   assert.throws(()=>t.balanceFour(addedCourt,'other'),/라운드 방식/);
   assert.throws(()=>t.balanceFour(addedCourt,'same',[addedCourt.slice(0,3)]),/이전 대진/);
+  const quartetRounds=t.generate(players(4),1,3,['same','balanced','same']);
+  assert.equal(t.partnerSummary(quartetRounds).duplicateTeams,0,'same and adjacent share a single partner history');
+  assert.equal(new Set(quartetRounds.flatMap(r=>r.g.flatMap(g=>[g.slice(0,2),g.slice(2)].map(team=>JSON.stringify([...team].sort()))))).size,6);
+  assert.equal(t.partnerSummary(t.generate(players(4),1,4,Array(4).fill('same'))).duplicateTeams,2,'four players in four rounds must repeat two teams');
+  const cross=t.generate(players(8),2,7,Array(7).fill('same'));
+  assert.equal(t.partnerSummary(cross).duplicateTeams,0,'cross-court search finds all seven different partners for eight players');
+  assert.ok(cross.some(r=>r.g.some(g=>g.some(n=>Number(n)<=4)&&g.some(n=>Number(n)>4))),'cross-court exchange is actually exercised');
+  for(const r of cross)assert.deepEqual([...r.g.flat()].sort(),players(8).map(p=>p.name).sort());
+  assert.equal(t.partnerSummary(t.generate(players(8),2,8,Array(8).fill('same'))).duplicateTeams,4,'unavoidable eight-round repeats are reported honestly');
+  assert.deepEqual(t.partnerSummary([{method:'same',g:[['a','b','c','d']]},{method:'random',g:[['a','b','c','d']]},{method:'balanced',g:[['b','a','d','c']]}]),{duplicateTeams:2,pairs:[{names:['a','b'],count:2},{names:['c','d'],count:2}]});
+  const withRandom=t.generate(players(4),1,4,['random','same','balanced','same']);
+  assert.deepEqual(withRandom.slice(1).map(r=>r.g),quartetRounds.map(r=>r.g),'random partners must never penalize later scored teams');
+  assert.equal(t.partnerSummary(withRandom).duplicateTeams,0);
+  assertNoBetterSingleSplit(cross,players(8));
   const roles=players(9);roles[0].lateRegistration=true;roles[1].type='guest';roles[2].operator=true;
   const rests=t.generate(roles,2,5,Array(5).fill('same')).map(r=>r.rest);
   assert.deepEqual(rests.slice(0,3),[['1'],['2'],['3']]);
@@ -105,18 +140,15 @@ export async function runScheduleChecks({worker,env,origin}){
       assert.equal(new Set([...playing,...r.rest,...r.late]).size,n);
       assert.equal(playing.length+r.rest.length+r.late.length,n);
       assert.ok(r.g.every(g=>g.length===4));
-      for(const match of r.g){if(r.method==='random')continue;
-        const points=match.map(name=>roster.find(p=>p.name===name).points);
-        assert.equal(Math.abs(points[0]+points[1]-points[2]-points[3]),Math.min(...allSplitGaps(points)));
-      }
     }
+    assertNoBetterSingleSplit(rounds,roster);
     for(const special of roster.slice(1,4))assert.ok(rounds.filter(r=>r.rest.includes(special.name)).length<=1);
   }
   const afterRandomLate=players(9).map((p,i)=>({...p,points:[160,154,154,147,132,132,119,101,88][i],lateRounds:i===8?1:0,lateRegistration:i===8}));
   const afterRandomLateRounds=t.generate(afterRandomLate,2,3,['random','same','same']);
   assert.deepEqual(afterRandomLateRounds[0].late,['9']);
   assert.deepEqual(afterRandomLateRounds.slice(1).map(r=>r.method),['same','same']);
-  assertOptimalTeams(afterRandomLateRounds,afterRandomLate);
+  assertNoBetterSingleSplit(afterRandomLateRounds,afterRandomLate);
   const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
   assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);

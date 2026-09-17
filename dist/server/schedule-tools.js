@@ -13,8 +13,9 @@ export function createScheduleTools(){
     const choices=splits.map(indices=>{const players=indices.map(i=>roster4[i]);return {
       players,
       gap:method==='random'?0:Math.abs(pts(players[0])+pts(players[1])-pts(players[2])-pts(players[3])),
+      duplicates:Number((pairCount.get(pair(players[0],players[1]))||0)>0)+Number((pairCount.get(pair(players[2],players[3]))||0)>0),
       repeats:(pairCount.get(pair(players[0],players[1]))||0)+(pairCount.get(pair(players[2],players[3]))||0)
-    };}).sort((a,b)=>a.gap-b.gap||a.repeats-b.repeats);
+    };}).sort((a,b)=>method==='random'?0:a.duplicates-b.duplicates||a.repeats-b.repeats||a.gap-b.gap);
     return choices[0].players;
   }
   function balanceFour(roster4,method,previousMatches=[]){
@@ -31,6 +32,99 @@ export function createScheduleTools(){
     r.rest=available.filter(name=>!playing.has(name));
     r.late=d.names.filter(name=>missed(d,name)>ri);
     return r;
+  }
+  function partnerSummary(schedule){
+    const counts=new Map();
+    for(const round of schedule||[])if(round.method!=='random')for(const match of round.g||[]){
+      if(match.length!==4)continue;
+      for(const names of [match.slice(0,2),match.slice(2,4)]){
+        const ordered=[...names].sort(),key=JSON.stringify(ordered);
+        const item=counts.get(key)||{names:ordered,count:0};item.count++;counts.set(key,item);
+      }
+    }
+    const pairs=[...counts.values()].filter(p=>p.count>1);
+    return {duplicateTeams:pairs.reduce((n,p)=>n+p.count-1,0),pairs};
+  }
+  // Revisit the entire generated draft, not just the partners of earlier rounds.
+  // Bounded search keeps large (200-player/20-round) drafts responsive. Every
+  // accepted change improves duplicates, repeat concentration, then team balance.
+  function repairPartners(schedule,roster){
+    const byName=new Map(roster.map((p,i)=>[p.name,i])),size=roster.length;
+    const counts=new Uint16Array(size*size),points=roster.map(pts),entries=[];
+    const key=(a,b)=>Math.min(a,b)*size+Math.max(a,b);
+    const keys=m=>[key(m[0],m[1]),key(m[2],m[3])];
+    const add=(m,delta)=>{for(const k of keys(m))counts[k]+=delta;};
+    const gap=m=>Math.abs(points[m[0]]+points[m[1]]-points[m[2]]-points[m[3]]);
+    const splits=m=>[m,[m[0],m[2],m[1],m[3]],[m[0],m[3],m[1],m[2]]];
+    const better=(a,b)=>a[0]<b[0]||a[0]===b[0]&&(a[1]<b[1]||a[1]===b[1]&&a[2]<b[2]);
+    const cost=(a,b)=>{
+      const edges=b?[...keys(a),...keys(b)]:keys(a);let duplicates=0,repeats=0;
+      for(let i=0;i<edges.length;i++){
+        let n=counts[edges[i]];for(let j=0;j<i;j++)if(edges[j]===edges[i])n++;
+        duplicates+=Number(n>0);repeats+=n;
+      }
+      return [duplicates,repeats,gap(a)+(b?gap(b):0)];
+    };
+    for(const [ri,round] of schedule.entries())if(round.method!=='random')for(const [mi,match] of round.g.entries()){
+      const m=match.map(name=>byName.get(name));entries.push({ri,mi,m});add(m,1);
+    }
+    if(entries.length<2)return;
+    const repeated=e=>keys(e.m).some(k=>counts[k]>1);
+    const sweep=()=>{
+      let changed=false;
+      for(const e of entries){
+        add(e.m,-1);let best=e.m,bestCost=cost(best);
+        for(const m of splits(e.m).slice(1)){const next=cost(m);if(better(next,bestCost)){best=m;bestCost=next;}}
+        if(best!==e.m){e.m=best;changed=true;}add(e.m,1);
+      }
+      return changed;
+    };
+    for(let pass=0;pass<6&&sweep();pass++);
+    // Two fixed quartets can need to change together to escape a greedy choice.
+    let fixedBudget=24000;
+    for(let pass=0;pass<2&&entries.some(repeated);pass++){
+      let changed=false;
+      for(let i=0;i<entries.length&&fixedBudget>0;i++)for(let j=i+1;j<entries.length&&fixedBudget>0;j++){
+        const a=entries[i],b=entries[j];
+        if((!repeated(a)&&!repeated(b))||a.m.filter(p=>b.m.includes(p)).length<2)continue;
+        add(a.m,-1);add(b.m,-1);let bestA=a.m,bestB=b.m,bestCost=cost(a.m,b.m);
+        for(const x of splits(a.m))for(const y of splits(b.m)){
+          fixedBudget--;const next=cost(x,y);if(better(next,bestCost)){bestA=x;bestB=y;bestCost=next;}
+        }
+        if(bestA!==a.m||bestB!==b.m){a.m=bestA;b.m=bestB;changed=true;}add(a.m,1);add(b.m,1);
+      }
+      if(!changed)break;
+      for(let pass=0;pass<3&&sweep();pass++);
+    }
+    // Only if fixed quartets still repeat, try all 315 team/match arrangements
+    // for two courts in the SAME round. Rest/late/random rosters never move.
+    let crossBudget=180000;
+    for(let pass=0;pass<4&&crossBudget>0&&entries.some(repeated);pass++){
+      let changed=false;
+      for(let ri=0;ri<schedule.length&&crossBudget>0;ri++){
+        const courts=entries.filter(e=>e.ri===ri);
+        for(let distance=1;distance<courts.length&&crossBudget>0;distance++)for(let i=0;i+distance<courts.length&&crossBudget>0;i++){
+          const a=courts[i],b=courts[i+distance];if(!repeated(a)&&!repeated(b))continue;
+          const pool=[...a.m,...b.m];
+          add(a.m,-1);add(b.m,-1);
+          const before=cost(a.m,b.m);let bestA=a.m,bestB=b.m,bestCost=before,bestMoves=0;
+          for(let j=1;j<6&&crossBudget>0;j++)for(let k=j+1;k<7&&crossBudget>0;k++)for(let l=k+1;l<8&&crossBudget>0;l++){
+            const indices=[0,j,k,l],left=indices.map(n=>pool[n]),right=pool.filter((_,n)=>!indices.includes(n));
+            for(const x of splits(left))for(const y of splits(right)){
+              crossBudget--;const next=cost(x,y);
+              // Do not exchange courts solely to improve points or styling.
+              if(next[0]>before[0]||next[0]===before[0]&&next[1]>=before[1])continue;
+              const moves=x.filter(p=>!a.m.includes(p)).length+y.filter(p=>!b.m.includes(p)).length;
+              if(better(next,bestCost)||next.every((v,n)=>v===bestCost[n])&&moves<bestMoves){bestA=x;bestB=y;bestCost=next;bestMoves=moves;}
+            }
+          }
+          if(bestA!==a.m){a.m=bestA;b.m=bestB;changed=true;}add(a.m,1);add(b.m,1);
+        }
+      }
+      if(!changed)break;
+      for(let pass=0;pass<3&&sweep();pass++);
+    }
+    for(const e of entries)schedule[e.ri].g[e.mi]=e.m.map(i=>roster[i].name);
   }
   function replacePlayer(d,ri,mi,si,next){
     const match=d.schedule[ri].g[mi];
@@ -76,11 +170,12 @@ export function createScheduleTools(){
       }
       const g=groups.map(group=>{
         const s=chooseFour(group,method,pairCount);
-        addPartnerCounts(pairCount,s);
+        if(method!=='random')addPartnerCounts(pairCount,s);
         return s.map(p=>p.name);
       });
       out.push({round:ri+1,method,g,rest:resting.map(p=>p.name),late});
     }
+    repairPartners(out,roster);
     return out;
   }
   function matchState(d,ri,mi){
@@ -102,5 +197,5 @@ export function createScheduleTools(){
     }
     return out;
   }
-  return {availableNames,refreshRound,replacePlayer,balanceFour,generate,matchState,cleanProgress};
+  return {availableNames,refreshRound,replacePlayer,balanceFour,partnerSummary,generate,matchState,cleanProgress};
 }
