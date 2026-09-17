@@ -115,9 +115,11 @@ async function checkPickerLocalNamesAndNavigation(){
     await openPicker({id:'draft',participantIds:people.map(p=>p.id),names:['중복 (회원)','중복 (게스트)','A','B','C'],courts:1,rounds:1,absent:[]});
     assert.match(h.dialog.innerHTML,/동일은 휴식·늦참을 뺀 뒤 점수순 4명씩 고정으로 묶고, 동일 라운드 회차마다 1·4 vs 2·3 → 1·3 vs 2·4 → 1·2 vs 3·4 팀 조합을 순환합니다\./,'picker help must explain same rank blocks and its three-team cycle');
     assert.match(h.dialog.innerHTML,/동일의 고정 묶음·팀은 중복 후처리로 바꾸지 않습니다\./,'picker help must not promise partner-repeat repair for fixed same teams');
-    assert.match(h.dialog.innerHTML,/같은 라운드 인접 코트끼리만 조정합니다\./,'picker help must limit cross-court repair to adjacent courts');
-    assert.match(h.dialog.innerHTML,/인접은 비랜덤 경기의 팀 동반 중복을 먼저 줄이고, 동률이면 팀 점수 균형을 맞춥니다\./,'picker help must state the adjacent-round repeat-first, tie-only balance priority');
-    assert.match(h.dialog.innerHTML,/조건상 남는 팀 동반 반복은 그대로 안내합니다\./,'picker help must honestly report repeats that remain after permitted repair');
+    assert.match(h.dialog.innerHTML,/인접은 박스·근접 제약을 지키며 파트너 중복을 줄이고,/,'picker help must limit adjacent repair to the box and neighborhood constraints');
+    assert.match(h.dialog.innerHTML,/인접은 휴식·늦참을 뺀 뒤 점수 내림차순 4명씩 박스로 묶고, 한 경기에서 각 박스는 최대 2명만 사용하며 가까운 박스부터 우선 혼합합니다\./,'picker help must explain adjacent score boxes, max-two-per-box, and nearest-box priority');
+    assert.match(h.dialog.innerHTML,/인접한 두 박스 8명은 1·2·5·6 \/ 3·4·7·8 방식으로 섞고,/,'picker help must explain the eight-person adjacent mix');
+    assert.match(h.dialog.innerHTML,/인접한 두 박스 8명은 1·2·5·6 \/ 3·4·7·8 방식으로 섞고, 출전 인원이 4명뿐인 라운드는 다른 박스와 섞지 않고 예외 편성합니다\./,'picker help must explain the adjacent four-person exception');
+    assert.match(h.dialog.innerHTML,/인접은 박스·근접 제약을 지키며 파트너 중복을 줄이고, 조건상 남는 팀 동반 반복은 그대로 안내합니다\. 휴식·늦참과 랜덤은 바꾸지 않습니다\./,'picker help must explain constrained partner repair and remaining repeats without promising unlimited cross-court changes');
     await h.$('generate').onclick();
     assert.deepEqual(roster.map(person=>person.name),['중복 (회원)','중복 (게스트)','A','B','C'],'the generated roster must use the picker-local duplicate-name labels');
   }
@@ -167,7 +169,7 @@ async function checkAddedCourtBalance(){
   const fixture=()=>({id:'local-extra',operation:'original',names:members.map(p=>p.name),participantIds:members.map(p=>p.id),schedule:[{method:'same',g:[members.map(p=>p.name)],rest:[]}],results:{'0-0':'a'}});
   const make=(initial=fixture())=>{
     const messages=[],paint={innerHTML:''};let read=async()=>members;
-    const scope={initial,scheduleTools:createScheduleTools(),getPeople:()=>read(),alert:text=>messages.push(text),message:text=>messages.push(text),$:()=>paint,scheduleHTML:()=>'<updated/>'};
+    const scope={initial,editRoster:members,scheduleTools:createScheduleTools(),getPeople:()=>read(),alert:text=>messages.push(text),message:text=>messages.push(text),$:()=>paint,scheduleHTML:()=>'<updated/>'};
     const h=new Function(...Object.keys(scope),'let draft=initial,routeToken=1,saving=false,addingCourt=false;function changed(){draft.operation="changed";}'+actual('addBalancedCourt')+';return {addBalancedCourt,current:()=>draft,navigate(){draft=null;routeToken++;}};')(...Object.values(scope));
     return {...h,messages,paint,setRead(fn){read=fn;}};
   };
@@ -233,9 +235,67 @@ async function checkAddedCourtBalance(){
 
 function checkPartnerSummaryDisplay(){
   const d={names:[],schedule:[]};
-  const render=summary=>compile('scheduleHTML',{scheduleTools:{availableNames:()=>[],matchState:()=> 'waiting',partnerSummary:()=>summary},esc,nameHTML:esc,viewRound:1});
-  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/팀 파트너 중복이 없습니다\. 동일은 점수순 고정 4인 묶음과 회차별 팀 조합을 유지합니다\./,'editing schedule must explain fixed same blocks even without repeats');
-  assert.match(render({duplicateTeams:2,pairs:[]})(d,true),/팀 파트너 중복 2건이 남았습니다\. 동일의 고정 4인 묶음·팀은 유지하며, 인접 코트끼리만 조정한 뒤에도 참가 인원·라운드 수에 따라 반복이 남을 수 있습니다\./,'editing schedule must honestly retain repeats outside permitted adjacent-court repair');
+  const render=summary=>compile('scheduleHTML',{people:[],scheduleTools:{availableNames:()=>[],matchState:()=> 'waiting',partnerSummary:()=>summary,scoreGap:()=>null},esc,nameHTML:esc,viewRound:1});
+  const renderSchedule=schedule=>compile('scheduleHTML',{people:[],scheduleTools:{availableNames:()=>[],matchState:()=> 'waiting',partnerSummary:()=>({duplicateTeams:0}),scoreGap:()=>null},esc,nameHTML:esc,viewRound:1})({names:['가','나','다','라','마','바','사','아'],schedule,results:{},absent:[]},true);
+  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/팀 파트너 중복이 없습니다\. 동일은 점수순 고정 4인 묶음과 회차별 팀 조합을 유지하고, 인접은 점수순 4인 박스·박스별 최대 2명·가까운 박스 우선 제약 안에서 생성합니다\./,'editing schedule must explain same blocks and constrained adjacent generation even without repeats');
+  assert.match(render({duplicateTeams:2,pairs:[]})(d,true),/팀 파트너 중복 2건이 남았습니다\. 동일의 고정 4인 묶음·팀은 유지하며, 인접은 점수순 4인 박스·박스별 한 경기 최대 2명·가까운 박스 우선 제약을 지킨 뒤에도 참가 인원·라운드 수에 따라 반복이 남을 수 있습니다\./,'editing schedule must honestly retain repeats after constrained adjacent repair');
+  const fourNote=renderSchedule([{round:1,method:'balanced',g:[['가','나','다','라']],rest:[]}]);
+  assert.match(fourNote,/출전 인원이 4명뿐이라 다른 박스와 섞지 않고 예외 편성했습니다\./,'editing four-person adjacent rounds must show the exception notice');
+  const same=renderSchedule([{round:1,method:'same',g:[['가','나','다','라']],rest:[]}]);
+  assert.doesNotMatch(same,/출전 인원이 4명뿐이라 다른 박스와 섞지 않고 예외 편성했습니다\./,'same four-person rounds must not show the adjacent exception notice');
+  const eight=renderSchedule([{round:1,method:'balanced',g:[['가','나','마','바'],['다','라','사','아']],rest:[]}]);
+  assert.doesNotMatch(eight,/출전 인원이 4명뿐이라 다른 박스와 섞지 않고 예외 편성했습니다\./,'eight-person adjacent rounds must not show the four-person exception notice');
+  assert.match(render({duplicateTeams:0,pairs:[]})(d,true),/박스가 홀수 개면 마지막 세 박스를 함께 섞습니다\. 중복 정도가 같으면 팀 점수 균형을 맞춥니다\./,'editing help must explain the odd-box mix and equal-repeat balance priority');
+}
+
+function checkMatchWarnings(){
+  const tools=createScheduleTools(),names=['A','B','C','D','E','F','G','H'],people=[100,100,70,70,100,100,99,99].map((points,index)=>({id:'p'+index,name:names[index],points}));
+  const render=compile('scheduleHTML',{people:[],scheduleTools:tools,esc,nameHTML:esc,viewRound:1,winBtn:()=>'',matchStateControl:()=>''});
+  const single=(method,roster=people.slice(0,4))=>render({names:names.slice(0,4),participantIds:people.slice(0,4).map(p=>p.id),schedule:[{round:1,method,g:[names.slice(0,4)]}],results:{},absent:[]},false,false,roster);
+  const gapPhrase='상당한 시드 점수 차이가 존재하는 대진 입니다.',partnerPhrase='파트너가 중복된 대진입니다.',unknown='시드 점수를 확인할 수 없어 점수 차이를 계산하지 못했습니다.';
+  for(const method of ['same','balanced'])for(const [points,shown] of [[71,false],[70,true],[69,true]]){
+    const roster=people.slice(0,4).map((p,index)=>index>1?{...p,points}:p),html=single(method,roster);
+    assert.equal(html.includes(gapPhrase),shown,method+' exact gap '+(100-points)+' must '+(shown?'warn':'stay clear'));
+    assert.equal(html.includes(unknown),false,'known '+method+' gap '+(100-points)+' must not claim its points are unavailable');
+  }
+  const publicHTML=single('balanced'),editorHTML=render({names:names.slice(0,4),participantIds:people.slice(0,4).map(p=>p.id),schedule:[{round:1,method:'balanced',g:[names.slice(0,4)]}],results:{},absent:[]},true,true,people.slice(0,4));
+  assert.match(publicHTML,/class="seed-gap-warning" role="note"/,'public detail warning is an accessible compact card');
+  assert.match(editorHTML,new RegExp(gapPhrase),'editor warning uses the exact current text');
+  const randomHTML=single('random');
+  for(const text of [gapPhrase,unknown,partnerPhrase])assert.doesNotMatch(randomHTML,new RegExp(text),'random matches must stay clear of nonrandom warnings');
+  const unknownHTML=single('same',people.slice(0,4).map((p,index)=>index===0?{...p,points:null}:p));
+  assert.doesNotMatch(unknownHTML,new RegExp(gapPhrase),'unknown current points must not be treated as zero or safe');
+  assert.match(unknownHTML,new RegExp(unknown),'unknown current points must explain that the nonrandom-match gap was not calculated');
+  assert.match(single('balanced',[]),new RegExp(unknown),'a failed current-roster read must display an unavailable-gap note instead of reusing a cache');
+  assert.match(single('balanced',people.slice(0,4).map((p,index)=>index===0?{...p,id:'renamed-id'}:p)),new RegExp(unknown),'a missing current ID must display an unavailable-gap note without a namesake fallback');
+
+  const sharedSchedule=[
+    {round:1,method:'same',g:[['A','B','C','D']]},
+    {round:2,method:'balanced',g:[['A','B','E','F'],['E','G','F','H']]},
+  ];
+  const sharedHTML=render({names,participantIds:people.map(p=>p.id),schedule:sharedSchedule,results:{},absent:[]},false,false,people),cards=sharedHTML.split('<div class="match ').slice(1);
+  assert.equal((sharedHTML.match(new RegExp(partnerPhrase,'g'))||[]).length,2,'a shared pair across same and balanced rounds warns every affected match, including its first occurrence');
+  assert.match(sharedHTML,/class="partner-duplicate-warning" role="note"><span aria-hidden="true">⚠️<\/span>/,'partner warning is an accessible card with the same warning icon');
+  assert.match(cards[0],new RegExp(gapPhrase),'a match with both conditions keeps its score-gap warning');
+  assert.match(cards[0],new RegExp(partnerPhrase),'a match with both conditions also shows its partner warning');
+  assert.match(cards[1],new RegExp(partnerPhrase),'the later cross-method occurrence shows its partner warning');
+  assert.doesNotMatch(cards[2],new RegExp(partnerPhrase),'an uninvolved match card stays clear of the partner warning');
+  const randomPairHTML=render({names,participantIds:people.map(p=>p.id),schedule:[{round:1,method:'same',g:[['A','B','C','D']]},{round:2,method:'random',g:[['A','B','E','F']]}],results:{},absent:[]},false,false,people);
+  assert.doesNotMatch(randomPairHTML,new RegExp(partnerPhrase),'a pair repeated only in a random round is excluded from partner warnings');
+}
+
+function checkEditorRosterIsolation(){
+  const stale=[{id:'p1',name:'이전 명단',points:100}],elements=new Map();let renderedRoster;
+  const build=new Function('people','scheduleHTML','esc','elements',`
+    let draft=null,editRoster=people,dirty=false;
+    const stopPoll=()=>{},startDraft=value=>{draft=structuredClone(value);},app={innerHTML:''},crumb=()=>'',scheduleTools={},openPicker=()=>{},save=()=>{},cancelEdit=()=>{},alert=()=>{},confirm=()=>true;
+    const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',oninput:null,onclick:null,onchange:null});return elements.get(id);};
+    ${actual('editSchedule')}
+    return {editSchedule,roster:()=>editRoster};
+  `);
+  const h=build(stale,(d,editing,results,roster)=>{renderedRoster=roster;return '';},esc,elements);
+  h.editSchedule({id:'draft',version:1,title:'',results:{},absent:[],schedule:[]},[]);
+  assert.deepEqual(h.roster(),[],'an editor opened after a failed detail roster read must retain its unavailable roster instead of using stale people');
 }
 
 async function checkSettlementVersions(){
@@ -320,6 +380,8 @@ export async function runClientAuditChecks(){
   await checkLatestDrawPoints();
   await checkAddedCourtBalance();
   checkPartnerSummaryDisplay();
+  checkMatchWarnings();
+  checkEditorRosterIsolation();
   await checkSettlementVersions();
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();

@@ -49,10 +49,26 @@ export async function runScheduleChecks({worker,env,origin}){
       sameIndex++;
     }
   };
+  const assertAdjacentBoxes=(rounds,roster)=>{
+    for(const r of rounds)if(r.method==='balanced'){
+      const playing=roster.filter(p=>!r.rest.includes(p.name)&&!r.late.includes(p.name))
+        .sort((a,b)=>Number(b.points)-Number(a.points));
+      const byName=new Map(playing.map((p,i)=>[p.name,Math.floor(i/4)])),boxCount=playing.length/4;
+      const localPool=box=>boxCount%2===1&&box>=boxCount-3?boxCount-3:Math.floor(box/2)*2;
+      for(const g of r.g){
+        const counts=new Map();
+        for(const name of g){assert.ok(byName.has(name));const box=byName.get(name);counts.set(box,(counts.get(box)||0)+1);}
+        if(playing.length!==4)assert.ok([...counts.values()].every(n=>n<=2),'each adjacent match has at most two players from a score box, even after repair');
+        assert.equal(new Set([...counts.keys()].map(localPool)).size,1,'repair cannot exchange players outside neighbouring two/last-three boxes');
+      }
+    }
+  };
   const p=players(8);
   assert.deepEqual(t.generate(p,2,1,['same'])[0].g,[['1','4','2','3'],['5','8','6','7']]);
   assert.deepEqual(t.generate(p,2,1,['balanced'])[0].g,[['1','6','2','5'],['3','8','4','7']]);
-  assert.deepEqual(t.generate(players(12),3,1,['balanced'])[0].g[2],['9','12','10','11']);
+  assert.deepEqual(t.generate(players(12),3,1,['balanced'])[0].g,[['1','6','2','5'],['3','10','4','9'],['7','12','8','11']]);
+  assert.deepEqual(t.generate(players(20),5,1,['balanced'])[0].g,[['1','6','2','5'],['3','8','4','7'],['9','14','10','13'],['11','18','12','17'],['15','20','16','19']]);
+  assert.deepEqual(t.generate(players(4),1,1,['balanced'])[0].g,[['1','4','2','3']],'four players are explicitly allowed as a single-box exception');
   const quartet=[
     {id:'jubam',name:'주밤',points:'116'},
     {id:'asics',name:'아식스',points:'110'},
@@ -117,9 +133,11 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.deepEqual(withRandom.slice(1).map(r=>r.g),quartetRounds.map(r=>r.g),'random partners must never penalize later scored teams');
   assert.equal(t.partnerSummary(withRandom).duplicateTeams,0);
   assertNoBetterSingleSplit(cross,players(8));
+  assertAdjacentBoxes(cross,players(8));
   const mixedMethods=['random','same','balanced','same','random','balanced','same','same'];
   const mixed=t.generate(players(12),3,mixedMethods.length,mixedMethods);
   assertSameRotation(mixed,players(12));
+  assertAdjacentBoxes(mixed,players(12));
   const mixedFour=t.generate(players(4),1,3,['same','balanced','same']);
   assertSameRotation(mixedFour,players(4));
   assert.deepEqual(mixedFour[1].g,[['1','2','3','4']],'a single adjacent match repairs around fixed same partners');
@@ -162,6 +180,7 @@ export async function runScheduleChecks({worker,env,origin}){
     const made=t.generate(roster,courts,rounds,methods);
     assert.equal(made.length,rounds);
     assertSameRotation(made,roster);
+    assertAdjacentBoxes(made,roster);
     for(const r of made){const playing=r.g.flat();
       assert.ok(r.g.every(match=>match.length===4&&new Set(match).size===4));
       assert.equal(new Set(playing).size,playing.length);
@@ -180,6 +199,7 @@ export async function runScheduleChecks({worker,env,origin}){
     }
     assertNoBetterSingleSplit(rounds,roster);
     assertSameRotation(rounds,roster);
+    assertAdjacentBoxes(rounds,roster);
     for(const special of roster.slice(1,4))assert.ok(rounds.filter(r=>r.rest.includes(special.name)).length<=1);
   }
   const afterRandomLate=players(9).map((p,i)=>({...p,points:[160,154,154,147,132,132,119,101,88][i],lateRounds:i===8?1:0,lateRegistration:i===8}));
@@ -196,9 +216,31 @@ export async function runScheduleChecks({worker,env,origin}){
   changing[1].lateRegistration=true;changing[2].type='guest';changing[3].operator=true;
   const changingRounds=t.generate(changing,3,6,['same','random','same','balanced','same','same']);
   assertSameRotation(changingRounds,changing);
+  assertAdjacentBoxes(changingRounds,changing);
   for(const r of changingRounds.slice(0,2))assert.ok(!r.g.flat().includes('1'));
   const bigRoster=players(200);
   assertSameRotation(t.generate(bigRoster,20,20,Array(20).fill('same')),bigRoster);
+  for(let n=4;n<=80;n+=4){
+    const roster=players(n),before=JSON.stringify(roster),made=t.generate(roster,n/4,8,Array(8).fill('balanced'));
+    assertAdjacentBoxes(made,roster);assert.equal(JSON.stringify(roster),before);
+    for(const r of made)assert.equal(new Set(r.g.flat()).size,n,'all selected players appear exactly once');
+  }
+  const boxedTies=players(28).map(p=>({...p,points:'100'}));
+  for(const seed of [1,2,3])withSeed(seed,()=>assertAdjacentBoxes(t.generate(boxedTies,7,8,Array(8).fill('balanced')),boxedTies));
+  assertAdjacentBoxes(t.generate(bigRoster,20,20,Array(20).fill('balanced')),bigRoster);
+  // Exact threshold uses max minus min, not team means. Unknowns are not zero.
+  const gapRoster=[100,100,70,70].map((points,i)=>({id:'gap-'+i,name:'gap-'+i,points}));
+  const gapDraft={names:gapRoster.map(p=>p.name),participantIds:gapRoster.map(p=>p.id)};
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster),30);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map(p=>({...p,points:p.points===70?'71':p.points}))),29);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map(p=>({...p,points:p.points===70?'69':p.points}))),31);
+  for(const value of [null,undefined,'',true,NaN,Infinity])assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map((p,i)=>i? p:{...p,points:value})),null);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.slice(1)),null);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map((p,i)=>i?p:{...p,id:'namesake'})),null);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map(p=>({...p,name:'renamed-'+p.name}))),30,'IDs survive renamed members');
+  assert.equal(t.scoreGap(gapDraft.names,{names:gapDraft.names},gapRoster),30,'legacy unique names still resolve');
+  assert.equal(t.scoreGap(gapDraft.names,{names:gapDraft.names},[...gapRoster,{...gapRoster[0],id:'duplicate'}]),null);
+  assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map((p,i)=>i?p:{...p,adhoc:true})),null);
   const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
   assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);
@@ -235,6 +277,7 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.deepEqual(saved.lateRounds,data.lateRounds);assert.deepEqual(saved.lateRegistration,data.lateRegistration);
   assert.deepEqual(saved.schedule.map(r=>r.method),['same','balanced','random','same','balanced']);
   assertSameRotation(saved.schedule,roster);
+  assertAdjacentBoxes(saved.schedule,roster);
   assert.ok(saved.schedule.slice(0,2).every(r=>r.late.includes(roster[0].name)&&!r.rest.includes(roster[0].name)));
   const edited=structuredClone(saved),other=[...edited.schedule[0].g[1]];
   t.replacePlayer(edited,0,0,0,other[0]);
@@ -251,5 +294,5 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.equal(scored.find(p=>p.name===names[1]).attendance,1);
   const noGames={...noArrival,rounds:2,names:names.slice(0,4),participantIds:roster.slice(0,4).map(p=>p.id),lateRounds:Object.fromEntries(names.slice(0,4).map(n=>[n,1])),schedule:[{g:[],method:'same'},{g:[names.slice(0,4)],method:'balanced'}],results:{}};
   assert.equal((await call('/api/posts/late-empty-test','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:noGames})).status,200);
-  console.log('PASS: ranked same quartets with exact three-team rotation, adjacent-only partner repair, late/rest rules, single-slot edits and saved schedule preservation.');
+  console.log('PASS: same rotation, adjacent max-two score boxes/local repair, score-gap boundaries, late/rest rules, edits and saved schedule preservation.');
 }

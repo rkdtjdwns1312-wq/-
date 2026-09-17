@@ -24,6 +24,20 @@ export function createScheduleTools(){
     const sorted=[...roster4].sort((a,b)=>pts(b)-pts(a));
     return [[0,3,1,2],[0,2,1,3],[0,1,2,3]][sameIndex%3].map(i=>sorted[i]);
   }
+  // Pair neighbouring score boxes. If their count is odd, reserve the last
+  // three boxes: each contributes two players to each of two different games.
+  function adjacentLayout(sorted){
+    const groups=[],pools=[];
+    for(let i=0;i<sorted.length;){
+      const take=sorted.length-i===12?12:Math.min(8,sorted.length-i);
+      const pool=sorted.slice(i,i+take);pools.push(pool);
+      const slots=take===12?[[0,1,4,5],[2,3,8,9],[6,7,10,11]]:
+        take===8?[[0,1,4,5],[2,3,6,7]]:[[0,1,2,3]];
+      for(const indices of slots)groups.push(indices.map(n=>pool[n]));
+      i+=take;
+    }
+    return {groups,pools};
+  }
   function balanceFour(roster4,method,previousMatches=[],sameIndex=0){
     if(!Array.isArray(roster4)||roster4.length!==4||roster4.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(roster4.map(p=>p.id)).size!==4||new Set(roster4.map(p=>p.name)).size!==4)throw Error('4명 대진 참가자 정보를 확인해주세요.');
     if(!['same','balanced','random'].includes(method))throw Error('라운드 방식을 확인해주세요.');
@@ -53,11 +67,27 @@ export function createScheduleTools(){
     const pairs=[...counts.values()].filter(p=>p.count>1);
     return {duplicateTeams:pairs.reduce((n,p)=>n+p.count-1,0),pairs};
   }
+  // This is a current-roster display aid, never a source of settlement points.
+  // With explicit IDs, missing people must not be replaced by namesakes.
+  function scoreGap(match,d,people){
+    if(!Array.isArray(match)||match.length!==4||!Array.isArray(people))return null;
+    const values=[];
+    for(const name of match){
+      const index=(d.names||[]).indexOf(name),id=d.participantIds?.[index];
+      const found=people.filter(p=>id?p.id===id:p.name===name);
+      if(found.length!==1||found[0].adhoc)return null;
+      const value=found[0].points;
+      if(!(typeof value==='number'||typeof value==='string'&&value.trim()!==''))return null;
+      const points=Number(value);if(!Number.isFinite(points))return null;
+      values.push(points);
+    }
+    return Math.max(...values)-Math.min(...values);
+  }
   // Count the entire scored draft, including fixed same-seed partners, but only
   // repair adjacent rounds. Same-seed quartets and their rotation stay locked.
   // Bounded search keeps large (200-player/20-round) drafts responsive. Every
   // accepted change improves duplicates, repeat concentration, then team balance.
-  function repairPartners(schedule,roster){
+  function repairPartners(schedule,roster,adjacentPools){
     const byName=new Map(roster.map((p,i)=>[p.name,i])),size=roster.length;
     const counts=new Uint16Array(size*size),points=roster.map(pts),entries=[];
     const key=(a,b)=>Math.min(a,b)*size+Math.max(a,b);
@@ -74,12 +104,29 @@ export function createScheduleTools(){
       }
       return [duplicates,repeats,gap(a)+(b?gap(b):0)];
     };
-    for(const [ri,round] of schedule.entries())if(round.method!=='random')for(const [mi,match] of round.g.entries()){
-      const m=match.map(name=>byName.get(name));
-      add(m,1);
-      if(round.method==='balanced')entries.push({ri,mi,m});
+    for(const [ri,round] of schedule.entries())if(round.method!=='random'){
+      const poolOf=new Map();
+      // Each pool object is shared by its courts; exchanges must stay inside it.
+      for(const pool of adjacentPools[ri]||[]){
+        const rule={boxOf:new Map(pool.map((p,i)=>[byName.get(p.name),Math.floor(i/4)])),single:pool.length===4};
+        for(const p of pool)poolOf.set(byName.get(p.name),rule);
+      }
+      for(const [mi,match] of round.g.entries()){
+        const m=match.map(name=>byName.get(name));add(m,1);
+        if(round.method==='balanced')entries.push({ri,mi,m,rule:poolOf.get(m[0])});
+      }
     }
     if(!entries.length)return;
+    const allowed=(m,rule)=>{
+      const boxes=new Map();
+      for(const p of m){
+        const box=rule.boxOf.get(p);if(box===undefined)return false;
+        const count=(boxes.get(box)||0)+1;
+        if(!rule.single&&count>2)return false;
+        boxes.set(box,count);
+      }
+      return true;
+    };
     const repeated=e=>keys(e.m).some(k=>counts[k]>1);
     const sweep=()=>{
       let changed=false;
@@ -108,19 +155,22 @@ export function createScheduleTools(){
       for(let pass=0;pass<3&&sweep();pass++);
     }
     // Only if fixed quartets still repeat, try all 315 team/match arrangements
-    // for two courts in the SAME round. Rest/late/random rosters never move.
+    // for two courts in the SAME round and local 2/3-box pool. Never violate
+    // the max-two-per-box limit to reduce partner repeats.
     let crossBudget=180000;
     for(let pass=0;pass<4&&crossBudget>0&&entries.some(repeated);pass++){
       let changed=false;
       for(let ri=0;ri<schedule.length&&crossBudget>0;ri++){
         const courts=entries.filter(e=>e.ri===ri);
         for(let distance=1;distance<courts.length&&crossBudget>0;distance++)for(let i=0;i+distance<courts.length&&crossBudget>0;i++){
-          const a=courts[i],b=courts[i+distance];if(!repeated(a)&&!repeated(b))continue;
+          const a=courts[i],b=courts[i+distance];
+          if(a.rule!==b.rule||(!repeated(a)&&!repeated(b)))continue;
           const pool=[...a.m,...b.m];
           add(a.m,-1);add(b.m,-1);
           const before=cost(a.m,b.m);let bestA=a.m,bestB=b.m,bestCost=before,bestMoves=0;
           for(let j=1;j<6&&crossBudget>0;j++)for(let k=j+1;k<7&&crossBudget>0;k++)for(let l=k+1;l<8&&crossBudget>0;l++){
             const indices=[0,j,k,l],left=indices.map(n=>pool[n]),right=pool.filter((_,n)=>!indices.includes(n));
+            if(!allowed(left,a.rule)||!allowed(right,b.rule))continue;
             for(const x of splits(left))for(const y of splits(right)){
               crossBudget--;const next=cost(x,y);
               // Do not exchange courts solely to improve points or styling.
@@ -155,7 +205,7 @@ export function createScheduleTools(){
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
     const restCount=new Map(roster.map(p=>[p.id,0])),pairCount=new Map();
-    const out=[];let sameIndex=0;
+    const out=[],adjacentPools=[];let sameIndex=0;
     for(let ri=0;ri<rounds;ri++){
       const available=roster.filter(p=>(Number(p.lateRounds)||0)<=ri);
       const late=roster.filter(p=>(Number(p.lateRounds)||0)>ri).map(p=>p.name);
@@ -172,12 +222,10 @@ export function createScheduleTools(){
       if(method==='random'){
         const sorted=shuffle(playing);for(let i=0;i<sorted.length;i+=4)groups.push(sorted.slice(i,i+4));
       }else{
-        const sorted=(method==='same'?[...playing]:shuffle(playing)).sort((a,b)=>pts(b)-pts(a));
-        for(let i=0;i<sorted.length;){
-          if(method==='balanced'&&sorted.length-i>=8){
-            groups.push([sorted[i],sorted[i+1],sorted[i+4],sorted[i+5]],[sorted[i+2],sorted[i+3],sorted[i+6],sorted[i+7]]);i+=8;
-          }else{groups.push(sorted.slice(i,i+4));i+=4;}
-        }
+        const sorted=[...playing].sort((a,b)=>pts(b)-pts(a));
+        if(method==='balanced'){
+          const layout=adjacentLayout(sorted);groups.push(...layout.groups);adjacentPools[ri]=layout.pools;
+        }else for(let i=0;i<sorted.length;i+=4)groups.push(sorted.slice(i,i+4));
       }
       const g=groups.map(group=>{
         const s=method==='same'?sameFour(group,sameIndex):chooseFour(group,method,pairCount);
@@ -187,7 +235,7 @@ export function createScheduleTools(){
       out.push({round:ri+1,method,g,rest:resting.map(p=>p.name),late});
       if(method==='same')sameIndex++;
     }
-    repairPartners(out,roster);
+    repairPartners(out,roster,adjacentPools);
     return out;
   }
   function matchState(d,ri,mi){
@@ -209,5 +257,5 @@ export function createScheduleTools(){
     }
     return out;
   }
-  return {availableNames,refreshRound,replacePlayer,balanceFour,partnerSummary,generate,matchState,cleanProgress};
+  return {availableNames,refreshRound,replacePlayer,balanceFour,partnerSummary,scoreGap,generate,matchState,cleanProgress};
 }

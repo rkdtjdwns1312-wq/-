@@ -15,15 +15,17 @@ function fixture(){return {id:'ui-progress',kind:'schedule',version:1,title:'Fix
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 function harness(){
   return new Function('scheduleTools','server',`
-    let draft=null,dirty=false,routeToken=1,saving=false,recordingResult=false,viewRound=1,pollTimer=null;
-    let nextTimer=0,html='',renders=0,paint='',winner=null,bindings=0;
+    let draft=null,dirty=false,routeToken=1,detailRead=0,saving=false,recordingResult=false,viewRound=1,pollTimer=null;
+    let nextTimer=0,html='',renders=0,paint='',winner=null,bindings=0,rosterSize=-1;
     const timers=new Map(),calls=[],messages=[],location={hash:'#post/'+server.id},dialog={open:false},EDITOR='';
     const setInterval=fn=>{const id=++nextTimer;timers.set(id,fn);return id;};
     const clearInterval=id=>timers.delete(id);
     const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}};
     const app={get innerHTML(){return html;},set innerHTML(value){html=value;renders++;},querySelector:()=>null,querySelectorAll:()=>[]};
-    const $=()=>null,crumb=()=>'',esc=s=>String(s??''),date=s=>String(s??''),scheduleHTML=()=>'<matches />';
+    const $=()=>null,crumb=()=>'',esc=s=>String(s??''),date=s=>String(s??''),scheduleHTML=(d,editing,showResults,roster)=>{rosterSize=Array.isArray(roster)?roster.length:-1;return '<matches />';};
     const message=(text,error)=>messages.push({text,error});
+    let peopleImpl=async()=>[];
+    const getPeople=force=>peopleImpl(force);
     const applyMatchState=(d,el,ri,mi,state)=>{paint=state;};
     const applyWin=(el,value)=>{winner=value;};
     const bindProgressControls=()=>{bindings++;};
@@ -41,8 +43,8 @@ function harness(){
     ${functions}
     return {
       server,calls,messages,timers,recordProgress,recordResult,detail,startDraft,startDetailPoll,
-      setAPI(fn){apiImpl=fn;},getAPI(){return apiImpl;},
-      snapshot(){return {draft,routeToken,saving,recordingResult,html,renders,paint,winner,bindings,pollTimer};},
+      setAPI(fn){apiImpl=fn;},getAPI(){return apiImpl;},setPeople(fn){peopleImpl=fn;},
+      snapshot(){return {draft,routeToken,saving,recordingResult,html,renders,paint,winner,bindings,pollTimer,rosterSize};},
       async tick(){const callback=timers.get(pollTimer);assertTimer(callback);await callback();}
     };
     function assertTimer(callback){if(!callback)throw Error('Polling was not restarted');}
@@ -87,12 +89,31 @@ export async function runProgressUIChecks(){
     assert.equal(h.snapshot().renders,0);assert.equal(h.timers.size,0);
   }
   {
-    const h=harness(),d=fixture(),read=deferred();
-    h.setAPI(()=>read.promise);
+    const h=harness(),d=fixture(),read=deferred(),roster=deferred();
+    h.setAPI(()=>read.promise);h.setPeople(()=>roster.promise);
     const pending=h.detail(d.id,1);
-    h.startDraft(d);read.resolve({data:d});await pending;
-    assert.equal(h.snapshot().renders,0,'a GET already in flight cannot overwrite an editor');
+    read.resolve({data:d});await Promise.resolve();h.startDraft(d);roster.resolve([]);await pending;
+    assert.equal(h.snapshot().renders,0,'a detail whose roster read finishes after editing starts cannot overwrite an editor');
     assert.equal(h.timers.size,0);
+  }
+  {
+    const h=harness(),d=fixture(),roster=d.names.map((name,index)=>({id:'p'+index,name,points:100-index}));d.participantIds=roster.map(p=>p.id);
+    h.setPeople(async()=>roster);await h.detail(d.id,1);
+    assert.equal(h.snapshot().rosterSize,4,'a direct schedule link passes its freshly read people to detail rendering');
+  }
+  {
+    const h=harness(),d=fixture(),olderRoster=deferred(),freshRoster=d.names.map((name,index)=>({id:'p'+index,name,points:100-index}));let reads=0,rosters=0;
+    h.setAPI(async()=>({data:{...d,version:++reads}}));h.setPeople(()=>++rosters===1?olderRoster.promise:Promise.resolve(freshRoster));
+    const older=h.detail(d.id,1);await Promise.resolve();const latest=h.detail(d.id,1);await latest;olderRoster.resolve(freshRoster);await older;
+    assert.equal(h.snapshot().renders,1,'a delayed roster response from an older detail request cannot overwrite the newer same-route detail');
+    assert.equal(h.snapshot().rosterSize,4,'the newest detail keeps its own current roster');
+  }
+  {
+    const h=harness(),d=fixture(),stale=d.names.map((name,index)=>({id:'p'+index,name,points:100-index}));
+    h.setPeople(async()=>stale);await h.detail(d.id,1);
+    h.setPeople(async()=>{throw Error('offline');});await h.detail(d.id,1);
+    assert.equal(h.snapshot().renders,2,'a people read failure still renders the schedule detail');
+    assert.equal(h.snapshot().rosterSize,0,'a people read failure never reuses stale roster points to claim no warning');
   }
   {
     const h=harness(),d=fixture(),post=deferred();
@@ -110,10 +131,10 @@ export async function runProgressUIChecks(){
     h.startDraft(d);post.resolve({data:{version:2}});await pending;
   }
   {
-    const h=harness(),d=fixture(),read=deferred();
-    h.startDetailPoll(d,1);h.setAPI(()=>read.promise);
-    const pending=h.tick();h.startDraft(d);read.resolve({data:{...d,version:2}});await pending;
-    assert.equal(h.snapshot().renders,0);assert.equal(h.calls.length,1,'old polling response cannot start another read in the editor');
+    const h=harness(),d=fixture(),read=deferred(),roster=deferred();
+    h.startDetailPoll(d,1);h.setAPI(()=>read.promise);h.setPeople(()=>roster.promise);
+    const pending=h.tick();read.resolve({data:{...d,version:2}});await Promise.resolve();h.startDraft(d);roster.resolve([]);await pending;
+    assert.equal(h.snapshot().renders,0);assert.equal(h.calls.length,2,'a pending poll may begin its detail refresh, but its roster read cannot overwrite the editor');
     assert.equal(h.timers.size,0);
   }
   {
