@@ -14,6 +14,9 @@ import { runProgressUIChecks } from './check-progress-ui.mjs';
 import { runLiveUIChecks } from './check-live-ui.mjs';
 import { runServerAuditChecks } from './check-server-audit.mjs';
 import { runClientAuditChecks } from './check-client-audit.mjs';
+import { runSubstitutionChecks } from './check-substitution.mjs';
+import { runEmergencyUIChecks } from './check-emergency-ui.mjs';
+import { runOperatorNavChecks } from './check-operator-nav.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -39,6 +42,10 @@ assert.ok(html.includes('운영진권한'));assert.ok(!html.includes(env.OPERATO
 assert.ok(html.includes('콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일'));
 assert.ok(html.includes('.days-together strong{color:#03a84e'));
 assert.ok(html.includes('Intl.DateTimeFormat'));
+assert.ok(!html.includes('<nav class="operator-nav"'),'public pages must not render operator navigation');
+const operatorHtml=await (await worker.fetch(new Request(origin+'/operate-'+env.EDITOR_KEY),env)).text();
+assert.ok(operatorHtml.includes('<nav class="operator-nav"'),'operator pages must render the persistent navigation');
+assert.ok(operatorHtml.includes('class="operator-layout"'),'operator layout must reserve room for its sidebar');
 const rankings=await worker.fetch(new Request(origin+'/api/rankings'),env);assert.equal(rankings.status,200);const rankingData=await rankings.json();assert.equal(rankingData.items.length,61);assert.equal(rankingData.source,'콕끼리 시드 관리표.xlsx');assert.equal(rankingData.sourceDate,'2026-09-10');assert.equal(rankingData.updatedDate,'2026-09-10');
 const sio=rankingData.items.find(row=>row.name==='시오'),newMember=rankingData.items.find(row=>row.name==='호잇');assert.equal(sio.points,99);assert.equal(sio.seed,'B+');assert.equal(newMember.points,123);assert.equal(newMember.seed,'A+');
 // 주밤(115)·로토(104): the sheet said A+, the operator confirmed A on 2026-09-12; seeds follow the points rule everywhere, including the roster shown to operators.
@@ -234,6 +241,9 @@ await runLiveCourtsChecks({worker,env,origin,db});
 await runLiveUIChecks();
 await runServerAuditChecks();
 await runClientAuditChecks();
+await runSubstitutionChecks();
+await runEmergencyUIChecks();
+await runOperatorNavChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';

@@ -65,14 +65,20 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   await act('join',{court:'queue',names:['대기8']});
   d=await read();assert.equal(d.queue.length,3);assert.deepEqual(d.queue[0].names,['대기0','대기1','대기2','대기3']);
   assert.deepEqual(d.queue[2].names,['대기8','','','']);
-  const retained=JSON.stringify({courts:d.courts,queue:d.queue}),openVersion=d.version;
+  const retained=JSON.parse(db.prepare('SELECT payload FROM live_courts WHERE id=1').get().payload),openVersion=d.version;
   d=await act('close',{},true);assert.equal(d.isOpen,false);
-  assert.equal(JSON.stringify({courts:d.courts,queue:d.queue}),retained,'closing does not erase names or queued games');
+  for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[],'closing clears '+key+' even for operators');
+  assert.equal(d.version,openVersion+1,'closing clears and locks in one versioned write');
+  assert.deepEqual(JSON.parse(db.prepare('SELECT payload FROM live_courts WHERE id=1').get().payload),{courts:[],queue:[],isOpen:false,participants:[]},'empty state is persisted, not merely hidden');
+  assert.deepEqual(await act('close',{},true),d,'repeated empty close is idempotent');
   const closedPublic=await read();assert.deepEqual(closedPublic.courts,[]);assert.deepEqual(closedPublic.queue,[]);assert.deepEqual(closedPublic.participants,[]);
   for(const values of [{action:'join',court:0,name:'잠긴 입장'},{action:'join',court:'queue',name:'잠긴 대기'},{action:'leave',court:'queue',group:0,slot:0},{action:'end',court:0}])assert.equal((await call({version:d.version,...values})).status,409);
   assert.equal((await call({version:openVersion,action:'end',court:0})).status,409,'old open tabs cannot act after closure');
   assert.equal((await read(true)).version,d.version,'denied actions must not mutate the closed session');
-  d=await act('open',{},true);assert.equal(JSON.stringify({courts:d.courts,queue:d.queue}),retained);
+  d=await act('open',{},true);
+  for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[],'reopening never restores '+key);
+  // Restore only this local test fixture to exercise the existing FIFO scenarios.
+  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify(retained));d=await read();
   const queueDuplicate=await call({version:d.version,action:'join',court:'queue',name:'대기0'});
   assert.equal(queueDuplicate.status,409);assert.equal((await queueDuplicate.json()).error,'이미 다음 대진에 등록된 이름입니다.');
   d=await act('leave',{court:'queue',group:1,slot:2});assert.equal(d.queue[1].names[2],'');
@@ -129,8 +135,6 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   for(const name of ['시계가','시계나','시계다','시계라'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,d.updatedAt,'outgoing four return at game end');
   for(const name of ['시계마','시계바','시계사','시계아','시계자'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,oldTime,'other waits are not reset');
   assert.deepEqual(await read(),d,'reload preserves exact waiting starts');
-  const preservedTimes=d.participants;
-  await act('close',{},true);d=await act('open',{},true);assert.deepEqual(d.participants,preservedTimes);
   d=await act('create',{count:1},true);
   for(const name of ['시계마','시계바','시계사','시계아'])assert.equal(d.participants.find(p=>p.name===name).waitingSince,d.updatedAt,'cleared active games return to waiting');
   assert.equal(d.participants.find(p=>p.name==='시계자').waitingSince,oldTime);
@@ -138,6 +142,16 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   assert.equal(d.participants.find(p=>p.name==='시계자').waitingSince,oldTime,'cancelled partial game does not reset wait');
   const registrationRace=await Promise.all([call({version:d.version,action:'register',names:['경합등록']}),call({version:d.version,action:'register',names:['경합등록']})]);
   assert.deepEqual(registrationRace.map(r=>r.status).sort(),[200,409]);
+  d=await read();const beforeStaleClose=d;
+  assert.equal((await call({action:'close',version:d.version-1},true)).status,409);
+  assert.deepEqual(await read(true),beforeStaleClose,'a stale close cannot delete newer participant data');
+  const closeRegisterRace=await Promise.all([call({action:'close',version:d.version},true),call({action:'register',version:d.version,names:['종료중 등록']})]);
+  assert.deepEqual(closeRegisterRace.map(r=>r.status).sort(),[200,409]);
+  d=await act('close',{},true);
+  for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[],'session close erases all waiting times and '+key);
+  d=await act('open',{},true);d=await act('create',{count:1},true);
+  assert.equal((await call({action:'join',version:d.version,court:0,names:['시계가']})).status,409,'previous session registrants must register again');
+  d=await act('register',{names:['시계가']});assert.equal(d.participants[0].waitingSince,d.updatedAt,'new session starts a fresh waiting clock');
   // Old populated JSON upgrades without losing games, queue position, version or stable fallback time.
   const legacy={courts:[{names:['이전가','이전나','이전다','이전라'],state:'playing'}],queue:[{names:['이전마','','','']}],isOpen:true};
   db.prepare('UPDATE live_courts SET payload=?,updated_at=? WHERE id=1').run(JSON.stringify(legacy),oldTime);
@@ -149,9 +163,12 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   while(capacity.participants.length<500)capacity.participants.push({name:'한도'+capacity.participants.length,waitingSince:oldTime});
   db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify(capacity));
   assert.equal((await call({version:d.version,action:'register',names:['한도초과']})).status,409);
-  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify({...legacy,participants:d.participants}));
-  await act('close',{},true);
+  db.prepare('UPDATE live_courts SET payload=? WHERE id=1').run(JSON.stringify({...legacy,isOpen:false,participants:d.participants}));
+  const legacyClosed=await read(true);assert.ok(legacyClosed.participants.length);
+  assert.deepEqual(await read(true),legacyClosed,'reading legacy closed state does not erase data');
+  d=await act('close',{},true);assert.equal(d.version,legacyClosed.version+1,'explicit close cleans legacy retained state');
+  for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_courts').get().n,1,'only current state, no match history');
   assert.equal(snapshot(),original,'free courts must never change saved schedules, people, points or histories');
-  console.log('PASS: free courts registered-only joins, shared waiting timestamps/end reset, legacy preservation, registration races/capacity, operator gate, FIFO and zero scoring effects.');
+  console.log('PASS: free courts close clears the whole session atomically; registered-only joins, waiting timestamps/end reset, legacy reads, races/capacity, operator gate, FIFO and zero scoring effects.');
 }

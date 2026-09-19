@@ -6,6 +6,7 @@ import { runLiveUIChecks } from './check-live-ui.mjs';
 import { createScheduleTools } from './dist/server/schedule-tools.js';
 
 const source=await readFile(new URL('./dist/server/boards-client.js',import.meta.url),'utf8');
+const liveSource=await readFile(new URL('./dist/server/live-client.js',import.meta.url),'utf8');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
@@ -77,6 +78,27 @@ async function checkEncodedNoticeNavigation(){
   // route's own closure owns the counters; the injected undefined names are harmless globals for this focused path.
   await route();
   assert.equal(detailedId,'공지 A','a post link must decode the ID before the API layer encodes it');
+}
+
+async function checkBoardListArrows(){
+  const makeElement=()=>({innerHTML:'',hidden:false,disabled:false,textContent:'',onclick:null,insertAdjacentHTML(position,html){assert.equal(position,'beforeend');this.innerHTML+=html;}});
+  const makeHarness=items=>{
+    const elements=new Map(),app={innerHTML:'',set innerHTML(value){this._innerHTML=String(value);for(const id of ['newPost','postList','more'])elements.set(id,elements.get(id)||makeElement());},get innerHTML(){return this._innerHTML;}};
+    const $=id=>elements.get(id)||null;
+    return {app,$,api:async path=>({items,hasMore:false}),crumb:()=>'',elements};
+  };
+  const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1}];
+  for(const kind of ['notice','schedule']){
+    const h=makeHarness(items),board=compile('board',{app:h.app,crumb:h.crumb,EDITOR:'operator',$:h.$,api:h.api,esc,date:()=> '날짜',message(){},routeToken:1});
+    await board(kind,1);
+    const html=h.elements.get('postList').innerHTML;
+    assert.match(html,new RegExp('href="#post/'+encodeURIComponent('공지 1')+'"'),'board list must preserve encoded notice links');
+    assert.match(html,/href="#post\/schedule-1"/,'board list must preserve schedule links');
+    assert.doesNotMatch(html,/<span aria-hidden="true">→<\/span>/,kind+' list items must not render right arrows');
+  }
+  assert.match(source,/home-return/,'board home link must use the home-return style');
+  assert.match(source,/'홈으로 가기'/,'board home link must say 홈으로 가기');
+  assert.match(liveSource,/'<a class="crumb home-return" href="#home">홈으로 가기<\/a>/,'live render must use the home-return literal');
 }
 
 async function checkPickerCancelIsolation(){
@@ -375,6 +397,7 @@ async function checkHistoryAndPeopleWrites(){
 export async function runClientAuditChecks(){
   await checkLoginCancellation();
   await checkEncodedNoticeNavigation();
+  await checkBoardListArrows();
   await checkPickerCancelIsolation();
   await checkPickerLocalNamesAndNavigation();
   await checkLatestDrawPoints();

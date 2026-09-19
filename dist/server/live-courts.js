@@ -32,12 +32,15 @@ export async function liveCourts(request,env){
     if(['create','open','close'].includes(input.action)&&!editor)return json({error:'코트 생성과 실시간대진 열기·종료는 운영진만 할 수 있습니다.'},403);
     const row=await env.DB.prepare('SELECT * FROM live_courts WHERE id=1').first(),current=unpack(row);
     if(input.version!==current.version)return conflict();
-    let courts=current.courts,queue=current.queue,isOpen=current.isOpen;
-    const participants=current.participants,at=new Date().toISOString();
+    let courts=current.courts,queue=current.queue,isOpen=current.isOpen,participants=current.participants;
+    const at=new Date().toISOString();
     const resetWaiting=names=>{for(const person of participants)if(names.includes(person.name))person.waitingSince=at;};
     if(input.action==='open'||input.action==='close'){
       isOpen=input.action==='open';
-      if(current.isOpen===isOpen)return json({data:visible(current,editor)});
+      // Closing ends this disposable session, including old closed sessions
+      // that retained data. Keep version CAS below so stale clients cannot undo it.
+      if(current.isOpen===isOpen&&(isOpen||!courts.length&&!queue.length&&!participants.length))return json({data:visible(current,editor)});
+      if(!isOpen){courts=[];queue=[];participants=[];}
     }else if(input.action==='create'){
       if(!Number.isInteger(input.count)||input.count<1||input.count>20)return json({error:'코트 수는 1~20개로 입력해주세요.'},400);
       resetWaiting(courts.filter(c=>c.state==='playing').flatMap(c=>c.names));

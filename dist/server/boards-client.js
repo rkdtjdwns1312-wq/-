@@ -81,15 +81,15 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     closeList();
     return parts.join('');
   }
-  let people=[],peopleRead=0,draft=null,editRoster=people,dirty=false,routeToken=0,detailRead=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false;
+  let people=[],peopleRead=0,draft=null,editRoster=people,dirty=false,routeToken=0,detailRead=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false,emergencySubstituteOpening=false;
   let liveView=null;
   const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
-  async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok)throw Error(x.error||'요청에 실패했습니다.');return x;}
+  async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok){const error=Error(x.error||'요청에 실패했습니다.');error.status=r.status;throw error;}return x;}
   async function getPeople(force=false){if(force||!people.length){const request=++peopleRead,next=(await api('/api/people')).people;if(!Array.isArray(next))throw Error('최신 명단을 확인하지 못했습니다. 다시 시도해주세요.');if(request===peopleRead){people=next;syncOperators(people);}return next;}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
-  const crumb=kind=>'<a class="crumb" href="'+(kind?'#'+kind:'#home')+'">← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로')+'</a>';
+  const crumb=kind=>'<a class="crumb'+(kind?'':' home-return')+'" href="'+(kind?'#'+kind:'#home')+'">'+(kind?'← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로'):'홈으로 가기')+'</a>';
   async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
@@ -100,7 +100,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
       try{const x=await api('/api/posts?kind='+kind+'&offset='+offset);if(token!==routeToken)return;
         if(!offset)$('postList').innerHTML='';
         if(!offset&&!x.items.length)$('postList').innerHTML='<div class="empty"><img src="/mascot-rest.png" alt="기다리는 콕끼리"><p>아직 등록된 '+(kind==='schedule'?'대진표':'공지사항')+'가 없습니다.</p></div>';
-        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post'+((kind==='notice'||kind==='schedule')?' post-notice':'')+'" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':kind==='schedule'?'<span class="post-label post-label-alt">대진</span>':'')+'<div class="post-title">'+esc(p.title)+(kind==='schedule'&&p.settledAt?'<span class="settled-tag">마감</span>':'')+'</div>'+(kind==='schedule'&&p.settledAt&&Array.isArray(p.mvp)&&p.mvp.length?'<div class="mvp-line"><span class="mvp-medal" aria-hidden="true">🥇</span> <span class="mvp-title">MVP '+esc(p.mvp.join(' '))+'</span></div>':'')+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div><span aria-hidden="true">→</span></a>').join(''));
+        $('postList').insertAdjacentHTML('beforeend',x.items.map(p=>'<a class="post'+((kind==='notice'||kind==='schedule')?' post-notice':'')+'" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':kind==='schedule'?'<span class="post-label post-label-alt">대진</span>':'')+'<div class="post-title">'+esc(p.title)+(kind==='schedule'&&p.settledAt?'<span class="settled-tag">마감</span>':'')+'</div>'+(kind==='schedule'&&p.settledAt&&Array.isArray(p.mvp)&&p.mvp.length?'<div class="mvp-line"><span class="mvp-medal" aria-hidden="true">🥇</span> <span class="mvp-title">MVP '+esc(p.mvp.join(' '))+'</span></div>':'')+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div></a>').join(''));
         offset+=x.items.length;button.hidden=!x.hasMore;
       }catch(e){if(token===routeToken){message(e.message,true);button.hidden=false;button.textContent='다시 불러오기';}}finally{button.disabled=false;}
     }
@@ -166,8 +166,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     }
     const dVoid=m=>Array.isArray(d.absent)&&d.absent.length>0&&m.some(n=>d.absent.includes(n));
     const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
-    const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt);
-    const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button><button id="deletePost" class="danger">삭제</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
+    const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt),canEmergencySubstitute=Boolean(EDITOR&&d.kind==='schedule'&&!d.settledAt&&Number(d.version)>0);
+    const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button>'+(canEmergencySubstitute?'<button id="emergencySubstitute" class="emergency-substitute">긴급교체</button>':'')+'<button id="deletePost" class="danger">삭제</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
     const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?(allScoredDone?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>':'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. 라운드 버튼에 점이 있는 <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력하면 <b>대진 마감</b> 버튼이 나타나요.</div>'):'';
     app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.preTitle||d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">점수 반영 완료</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt,roster)+endBtn)+'</article>';
@@ -176,11 +176,50 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
       bindProgressControls(d,token);
     }
     if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d,roster);
+    if(canEmergencySubstitute&&$('emergencySubstitute'))$('emergencySubstitute').onclick=()=>openEmergencySubstitute(d,token);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d,token);
     if($('unsettlePost'))$('unsettlePost').onclick=()=>unsettlePost(d,token);
     const rtabs=app.querySelector('.round-tabs');if(rtabs)rtabs.onclick=e=>{const b=e.target.closest('.round-tab');if(!b)return;viewRound=+b.dataset.roundTab;app.querySelectorAll('.round-tab').forEach(x=>{const on=x===b;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on));});app.querySelectorAll('[data-round-panel]').forEach(p=>{p.hidden=(+p.dataset.roundPanel)!==viewRound;});};
     startDetailPoll(d,token);
+  }
+  async function openEmergencySubstitute(d,token){
+    if(!EDITOR||emergencySubstituteOpening||!currentDetail(d.id,token)||d.settledAt||Number(d.version)<1)return;
+    emergencySubstituteOpening=true;
+    const shownVersion=Number(d.version),shownId=d.id;
+    let currentPeople;
+    try{currentPeople=await getPeople(true);}catch(error){emergencySubstituteOpening=false;if(currentDetail(shownId,token))message(error.message||'최신 시드현황을 불러오지 못했습니다.',true);return;}
+    if(!currentDetail(shownId,token)||d.settledAt||Number(d.version)!==shownVersion){emergencySubstituteOpening=false;return;}
+    const activeNames=new Set(currentPeople.filter(person=>(person.type==='member'||person.type==='guest')&&!person.hidden&&!person.adhoc).map(person=>person.name));
+    dialog.innerHTML='<form id="emergencySubstituteForm"><div class="dialog-head"><h2 id="pickerTitle">긴급교체</h2><button type="button" id="closeEmergencySubstitute" aria-label="닫기">×</button></div><p class="emergency-note">기록된 승패 결과와 대진 진행 상태는 교체 멤버에게 그대로 이어집니다. 이 교체는 선택한 라운드·코트의 한 자리만 바꾸며, 다른 코트와 기존 기록은 유지됩니다.</p><div class="two emergency-target"><label>라운드<input id="substituteRound" type="number" min="1" max="'+d.schedule.length+'" step="1" value="'+Math.min(Math.max(1,viewRound),d.schedule.length)+'" required></label><label>코트<input id="substituteCourt" type="number" min="1" step="1" value="1" required></label></div><label>기존 멤버<input id="substituteOldName" maxlength="100" autocomplete="off" required></label><label>교체 멤버<input id="substituteNewName" maxlength="100" autocomplete="off" required></label><p class="emergency-hint">교체 멤버 이름은 시드현황에 등록된 현재 회원 또는 게스트 이름과 정확히 같아야 합니다. 없는 이름은 먼저 시드현황에 등록해주세요.</p><p id="emergencySubstituteError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="confirmEmergencySubstitute" class="primary">교체 확인</button><button type="button" id="cancelEmergencySubstitute">취소</button></div></form>';
+    const form=$('emergencySubstituteForm'),roundInput=$('substituteRound'),courtInput=$('substituteCourt'),oldInput=$('substituteOldName'),newInput=$('substituteNewName'),submit=$('confirmEmergencySubstitute'),errorOutput=$('emergencySubstituteError');
+    let working=false,composing=false;
+    const screenCurrent=()=>currentDetail(shownId,token),active=()=>screenCurrent()&&dialog.open&&dialog.querySelector('#emergencySubstituteForm')===form;
+    const close=()=>{if(!working)dialog.close();};
+    $('closeEmergencySubstitute').onclick=close;$('cancelEmergencySubstitute').onclick=close;
+    dialog.oncancel=event=>{if(working)event.preventDefault();};
+    form.addEventListener('compositionstart',()=>{composing=true;});form.addEventListener('compositionend',()=>{composing=false;});
+    form.onsubmit=async event=>{
+      event.preventDefault();if(working||composing||event.isComposing||!active())return;
+      const round=Number(roundInput.value),court=Number(courtInput.value),oldName=oldInput.value.trim(),newName=newInput.value.trim();
+      const match=Number.isInteger(round)&&round>=1&&round<=d.schedule.length&&Number.isInteger(court)&&court>=1?d.schedule[round-1]?.g?.[court-1]:null;
+      if(!match){errorOutput.textContent='라운드와 코트 번호를 다시 확인해주세요.';return;}
+      if(!oldName||!match.includes(oldName)){errorOutput.textContent='기존 멤버 이름은 선택한 코트의 참가자 이름과 정확히 같아야 합니다.';return;}
+      if(!newName||!activeNames.has(newName)){errorOutput.textContent='교체 멤버는 시드현황에 등록된 현재 회원 또는 게스트 이름과 정확히 같아야 합니다. 없는 이름은 먼저 시드현황에 등록해주세요.';return;}
+      if(newName===oldName){errorOutput.textContent='기존 멤버와 다른 교체 멤버를 입력해주세요.';return;}
+      const target={round,court,oldName,newName};
+      working=true;submit.disabled=true;submit.textContent='교체 중…';errorOutput.textContent='';
+      try{
+        await api('/api/posts/'+encodeURIComponent(shownId)+'/substitute',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({version:shownVersion,...target})});
+        if(!active())return;
+        dialog.oncancel=null;dialog.close();message('긴급교체를 저장했어요. 최신 대진표를 다시 불러옵니다.');await refreshDetail(d,token);
+      }catch(error){
+        if(!active())return;
+        if(error.status===409){dialog.oncancel=null;dialog.close();message('다른 변경이 있어 최신 대진표를 불러왔어요. 내용을 확인한 뒤 긴급교체를 다시 확인해주세요.',true);await refreshDetail(d,token);return;}
+        errorOutput.textContent=error.message||'긴급교체를 저장하지 못했습니다.';
+      }finally{if(active()){working=false;submit.disabled=false;submit.textContent='교체 확인';}}
+    };
+    emergencySubstituteOpening=false;dialog.showModal();oldInput.focus();
   }
   function changed(){dirty=true;draft.operation=crypto.randomUUID();}
   function startDraft(d){++routeToken;stopPoll();draft=structuredClone(d);draft.operation=crypto.randomUUID();dirty=false;}
