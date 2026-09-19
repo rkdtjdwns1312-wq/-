@@ -12,7 +12,7 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
     assert.equal((await r.json()).error,'현재 게임중인 회원입니다. 등록할 수 없습니다.');
     assert.deepEqual(await read(true),before,'duplicate rejection must leave names, queue and version unchanged');
   }
-  const snapshot=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes'].map(t=>[t,db.prepare('SELECT * FROM '+t).all()]));
+  const snapshot=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history'].map(t=>[t,db.prepare('SELECT * FROM '+t).all()]));
   const original=snapshot();
   assert.deepEqual(await read(),{version:0,courts:[],queue:[],participants:[],isOpen:false,updatedAt:null});
   for(const b of [null,{}, {version:0,action:'result',winner:'a'},{version:-1,action:'create'}])assert.equal((await call(b)).status,400);
@@ -168,6 +168,24 @@ export async function runLiveCourtsChecks({worker,env,origin,db}){
   assert.deepEqual(await read(true),legacyClosed,'reading legacy closed state does not erase data');
   d=await act('close',{},true);assert.equal(d.version,legacyClosed.version+1,'explicit close cleans legacy retained state');
   for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[]);
+  // Request 118: count selection and opening are one atomic, versioned operation.
+  const beforeOpen=d;
+  for(const count of [0,10,20,-1,1.5,'2',null,true]){
+    assert.equal((await call({action:'open',version:d.version,count},true)).status,400);
+    assert.deepEqual(await read(true),beforeOpen,'invalid count cannot partially open/create');
+  }
+  assert.equal((await call({action:'open',version:d.version,count:9})).status,403);
+  const openingRace=await Promise.all([call({action:'open',version:d.version,count:1},true),call({action:'open',version:d.version,count:9},true)]);
+  assert.deepEqual(openingRace.map(r=>r.status).sort(),[200,409]);
+  d=await read(true);assert.equal(d.version,beforeOpen.version+1);assert.equal(d.isOpen,true);assert.ok([1,9].includes(d.courts.length));assert.deepEqual(d.participants,[]);assert.deepEqual(d.queue,[]);
+  assert.ok(d.courts.every(c=>c.state==='waiting'&&c.names.length===4&&c.names.every(n=>n==='')));
+  d=await act('register',{names:['통합가','통합나','통합다','통합라']});d=await act('join',{court:0,names:['통합가','통합나','통합다','통합라']});
+  const occupied=await read(true);assert.deepEqual(await act('open',{count:occupied.courts.length===1?9:1},true),occupied,'reopening cannot resize or clear an active session');
+  const staleOpenVersion=occupied.version;
+  for(const count of [1,9]){await act('close',{},true);const closed=await read(true);d=await act('open',{count},true);assert.equal(d.version,closed.version+1);assert.equal(d.courts.length,count);assert.equal(d.isOpen,true);assert.deepEqual(d.participants,[]);}
+  assert.equal((await call({action:'open',version:staleOpenVersion,count:2},true)).status,409);
+  const nine=await read(true);assert.equal(nine.courts.length,9);
+  d=await act('close',{},true);for(const key of ['courts','queue','participants'])assert.deepEqual(d[key],[]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM live_courts').get().n,1,'only current state, no match history');
   assert.equal(snapshot(),original,'free courts must never change saved schedules, people, points or histories');
   console.log('PASS: free courts close clears the whole session atomically; registered-only joins, waiting timestamps/end reset, legacy reads, races/capacity, operator gate, FIFO and zero scoring effects.');

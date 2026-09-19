@@ -31,6 +31,12 @@ export async function runLiveUIChecks(){
     assert.equal(h.app.querySelector('#liveRegister'),null);assert.equal(h.app.querySelector('#liveJoin'),null);assert.ok(h.app.innerHTML.includes('운영진이 실시간대진을 열면 입장할 수 있어요.'));h.view.stop();
   }
   {
+    const initial={version:1,isOpen:false,courts:[],queue:[],participants:[],serverNow:now()};const h=harness(initial,'operator-key');await h.open();h.app.querySelector('#liveToggle').dispatch('click');const dialog=h.dialogs.at(-1);
+    h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('저장 실패');return {data:initial};});await dialog.querySelector('#liveToggleYes').onclick();
+    assert.equal(h.calls.filter(call=>call.method==='POST').length,1,'failed confirm does not repost automatically');assert.equal(dialog.removed,false);assert.equal(dialog.querySelector('#liveToggleYes').disabled,false,'failed confirm re-enables the action');
+    dialog.dispatch('cancel');assert.equal(h.calls.filter(call=>call.method==='POST').length,1,'Escape/cancel closes without another write');h.view.stop();
+  }
+  {
     const h=harness();await h.open();assert.ok(h.app.querySelector('#liveRegister'),'open session exposes public registration even with no editor');
     const dialog=h.register(),fields=dialog.querySelectorAll('.live-register-name');assert.equal(fields.length,4,'registration accepts one to four free-text names');fields[0].value='새 회원';fields[1].value='둘째';
     const updated={...fixture(),version:2,participants:[...fixture().participants,person('새 회원',0),person('둘째',0)],serverNow:now()};h.setAPI(async()=>({data:updated}));await h.submit(dialog);
@@ -67,7 +73,19 @@ export async function runLiveUIChecks(){
     const h=harness();await h.open();const dialog=h.join();dialog.querySelector('[data-live-member-index]').onclick();h.setAPI(async(path,options)=>{if(options?.method==='POST')throw Error('참가 명단에 먼저 등록한 회원만 선택할 수 있습니다.');return {data:h.server};});await h.submit(dialog);assert.equal(dialog.removed,false);assert.equal(dialog.querySelector('#liveJoinError').textContent,'참가 명단에 먼저 등록한 회원만 선택할 수 있습니다.');h.view.stop();
   }
   {
-    const initial={version:1,isOpen:false,courts:[],queue:[],participants:[person('A')],serverNow:now()};const h=harness(initial,'operator-key');await h.open();h.app.querySelector('#liveToggle').dispatch('click');const dialog=h.dialogs.at(-1);h.setAPI(async(path,options)=>options?.method==='POST'?{data:{...initial,version:2,isOpen:true,serverNow:now()}}:{data:initial});await dialog.querySelector('#liveToggleYes').onclick();assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:1,action:'open'});assert.equal(h.calls.find(call=>call.method==='POST').headers['x-kokkiri-editor'],'operator-key');assert.ok(h.app.querySelector('#liveRegister'),'opening retains the public registry and registration control');h.view.stop();
+    const initial={version:1,isOpen:false,courts:[],queue:[],participants:[person('A')],serverNow:now()};const h=harness(initial,'operator-key');await h.open();h.app.querySelector('#liveToggle').dispatch('click');const dialog=h.dialogs.at(-1);h.setAPI(async(path,options)=>options?.method==='POST'?{data:{...initial,version:2,isOpen:true,serverNow:now()}}:{data:initial});await dialog.querySelector('#liveToggleYes').onclick();const post=h.calls.find(call=>call.method==='POST');assert.deepEqual(post.body,{version:1,action:'open',count:1});assert.equal(h.calls.find(call=>call.method==='POST').headers['x-kokkiri-editor'],'operator-key');assert.ok(h.app.querySelector('#liveRegister'),'opening retains the public registry and registration control');h.view.stop();
+  }
+  {
+    const h=harness({version:4,isOpen:false,courts:[],queue:[],participants:[],serverNow:now()},'operator-key');await h.open();
+    assert.equal(h.app.querySelector('#liveCreate'),null,'standalone court creation button is removed');
+    h.app.querySelector('#liveToggle').dispatch('click');const dialog=h.dialogs.at(-1),select=dialog.querySelector('#liveCourtCount');
+    assert.ok(dialog.innerHTML.includes('<label for="liveCourtCount">코트 개수를 몇 개로 할까요?</label>'),'court count select has an explicit label');assert.deepEqual(select.options,['1','2','3','4','5','6','7','8','9'],'open dialog has exactly nine native options');assert.equal(select.value,'1','empty session defaults to one court');
+    select.value='9';await dialog.querySelector('#liveToggleYes').onclick();
+    assert.deepEqual(h.calls.find(call=>call.method==='POST').body,{version:4,action:'open',count:9},'selected nine courts are sent in the atomic open request');h.view.stop();
+  }
+  {
+    const h=harness({version:2,isOpen:false,courts:Array.from({length:12},()=>court(['','','',''])),queue:[],participants:[],serverNow:now()},'operator-key');await h.open();h.app.querySelector('#liveToggle').dispatch('click');
+    assert.equal(h.dialogs.at(-1).querySelector('#liveCourtCount').value,'9','existing court counts clamp to nine');h.view.stop();
   }
   {
     const initial={version:1,isOpen:true,courts:[court(['A','B','C','D'])],queue:[{names:['E','F','','']}],participants:['A','B','C','D','E','F'].map(name=>person(name,60)),serverNow:now()};const h=harness(initial,'operator-key',Date.now(),false);await h.open();h.app.querySelector('#liveToggle').dispatch('click');const dialog=h.dialogs.at(-1);

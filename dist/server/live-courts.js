@@ -37,11 +37,18 @@ export async function liveCourts(request,env){
     const resetWaiting=names=>{for(const person of participants)if(names.includes(person.name))person.waitingSince=at;};
     if(input.action==='open'||input.action==='close'){
       isOpen=input.action==='open';
+      if(isOpen&&input.count!==undefined&&(!Number.isInteger(input.count)||input.count<1||input.count>9))return json({error:'코트 수는 1~9개로 선택해주세요.'},400);
       // Closing ends this disposable session, including old closed sessions
       // that retained data. Keep version CAS below so stale clients cannot undo it.
       if(current.isOpen===isOpen&&(isOpen||!courts.length&&!queue.length&&!participants.length))return json({data:visible(current,editor)});
       if(!isOpen){courts=[];queue=[];participants=[];}
+      else if(input.count!==undefined){
+        // New UI creates and opens a fresh session with one CAS write.
+        // An already-open session returns above, never replacing active games.
+        courts=Array.from({length:input.count},blank);queue=[];participants=[];
+      }
     }else if(input.action==='create'){
+      // Retain legacy API behavior for pages opened before the unified open dialog.
       if(!Number.isInteger(input.count)||input.count<1||input.count>20)return json({error:'코트 수는 1~20개로 입력해주세요.'},400);
       resetWaiting(courts.filter(c=>c.state==='playing').flatMap(c=>c.names));
       courts=Array.from({length:input.count},blank);
