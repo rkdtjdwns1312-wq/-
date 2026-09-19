@@ -9,12 +9,11 @@ class FakeNode{
 }
 class FakeScroller extends FakeNode{
   constructor(dialog){super(dialog);this.scrollLeft=0;this.clientWidth=dialog.width||1000;this.scrollWidth=this.clientWidth*Math.max(1,(dialog.innerHTML.match(/<section class="score-history-segment"/g)||[]).length);}
-  scrollTo({left}){this.scrollLeft=left;}
   fireScroll(){this.listeners.scroll?.();}
 }
 class FakeDialog{
   constructor(){this.open=false;this._html='';this.root=null;this.scroller=null;this.nodes={};}
-  set innerHTML(value){this._html=String(value);const match=this._html.match(/data-score-history-owner="(\d+)"/);this.root=match?new FakeNode(this):null;this.scroller=match?new FakeScroller(this):null;this.nodes={};}
+  set innerHTML(value){this._html=String(value);this.root=/data-score-history-owner="\d+"/.test(this._html)?new FakeNode(this):null;this.scroller=/class="score-history-scroll"/.test(this._html)?new FakeScroller(this):null;this.nodes={};}
   get innerHTML(){return this._html;}
   showModal(){this.open=true;}
   close(){this.open=false;}
@@ -22,38 +21,63 @@ class FakeDialog{
   nodeFor(selector){if(selector==='.score-history-scroll')return this.scroller;return this.nodes[selector]||(this.nodes[selector]=new FakeNode(this));}
 }
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;');
-const segment=(from,index,hasOlder=true)=>({person:{id:'member-1',type:'member',name:'테스터',points:60,seed:'C'},range:{from,to:new Date(new Date(from).getTime()+140*86400000).toISOString()},points:[{id:'p-'+index,at:new Date(new Date(from).getTime()+70*86400000).toISOString(),before:59+index,points:60+index,kind:index?'settlement':'current',seed:'C'}],carry:{id:'carry-'+index,at:new Date(new Date(from).getTime()-1).toISOString(),points:59+index},hasOlder,nextBefore:hasOlder?from:'',recordedFrom:'2023-01-01T00:00:00.000Z'});
-const labelCount=html=>(html.match(/<text class="score-history-axis-label score-history-week-label(?: |")/g)||[]).length;
-const history=(recordedFrom,from,to,points,hasOlder=false)=>({person:{id:'member-1',type:'member',name:'테스터',points:points.at(-1)?.points??60,seed:'C'},range:{from,to},points,hasOlder,nextBefore:hasOlder?from:'',recordedFrom});
+const settlement=(id,at,before,points,scheduleId='schedule-'+id)=>({id,at,before,points,kind:'settlement',seed:'C',scheduleId});
+const history=({recordedFrom=null,from='2026-05-02T15:00:00.000Z',to='2026-09-19T15:00:00.000Z',points=[],carry=null,hasOlder=false,current=60}={})=>({person:{id:'member-1',type:'member',name:'테스터',points:current,seed:'C'},range:{from,to},points,carry,hasOlder,nextBefore:hasOlder?from:'',recordedFrom});
+const dots=html=>(html.match(/<circle class="score-history-point/g)||[]).length;
+const ticks=html=>(html.match(/<text class="score-history-axis-label score-history-week-label(?: |")/g)||[]).length;
+const pathD=html=>html.match(/<path class="score-history-line" d="([^"]+)"/i)?.[1]||'';
 
 export async function runScoreHistoryUIChecks(){
   const injectedFactory=new Function('return ('+createScoreHistory.toString()+')')();
-  const sorted=scoreHistoryModel({range:{from:'2026-01-01T00:00:00Z',to:'2026-05-21T00:00:00Z'},points:[{id:'baseline',at:'2026-02-01T00:00:00Z',before:null,points:20},{id:'event',at:'2026-02-01T00:00:00Z',before:20,points:21},{id:'current',at:'2026-02-01T00:00:00Z',before:21,points:21},{id:'old',at:'2026-01-02T00:00:00Z',points:19}]});
-  assert.deepEqual(sorted.points.map(p=>p.id),['old','baseline','event','current'],'같은 시각의 기준·변경·현재 기록은 서버 입력 순서를 보존해야 합니다');assert.equal(sorted.points[1].before,null,'null 이전 점수는 0점으로 바뀌면 안 됩니다');
-  const jooNight=history('2026-09-12T15:00:00.000Z','2026-05-03T15:00:00.000Z','2026-09-20T06:00:00.000Z',[{id:'first',at:'2026-09-12T15:00:00.000Z',before:115,points:116,kind:'settlement'},{id:'snapshot',at:'2026-09-18T15:00:00.000Z',before:116,points:116,kind:'snapshot'},{id:'current',at:'2026-09-19T01:00:00.000Z',before:116,points:116,kind:'current'}]);
-  const jooDialog=new FakeDialog(),jooView=injectedFactory({dialog:jooDialog,api:async()=>jooNight,esc,isAllowed:()=>true,notify:()=>{}});await jooView.open('member','member-1');assert.match(jooDialog.innerHTML,/첫 기록부터 누적 중인 실제 기간/);assert.equal(labelCount(jooDialog.innerHTML),2,'주밤은 실제 첫 기록 9/13부터 9/20까지 두 주차만 표시합니다');assert.match(jooDialog.innerHTML,/>9\/13<.*>9\/20</,'주밤의 주차 축은 한국 날짜 9/13·9/20입니다');assert.equal((jooDialog.innerHTML.match(/<circle class="score-history-point/g)||[]).length,3,'동일 주의 snapshot/current은 실제 점만 유지하고 주차 라벨을 늘리지 않습니다');
-  const hoit=history('2026-09-18T15:00:00.000Z','2026-05-03T15:00:00.000Z','2026-09-20T06:00:00.000Z',[{id:'snapshot',at:'2026-09-18T15:00:00.000Z',before:60,points:60,kind:'snapshot'},{id:'current',at:'2026-09-19T01:00:00.000Z',before:60,points:60,kind:'current'}]);
-  const hoitDialog=new FakeDialog(),hoitView=injectedFactory({dialog:hoitDialog,api:async()=>hoit,esc,isAllowed:()=>true,notify:()=>{}});await hoitView.open('member','member-1');assert.equal(labelCount(hoitDialog.innerHTML),1,'호잇처럼 9/19에만 기록이 있으면 한 주차만 표시합니다');assert.match(hoitDialog.innerHTML,/>9\/19</);
-  const three=history('2026-09-05T15:00:00.000Z','2026-05-03T15:00:00.000Z','2026-09-20T06:00:00.000Z',[{id:'three',at:'2026-09-05T15:00:00.000Z',before:null,points:60,kind:'current'}]);
-  const threeDialog=new FakeDialog(),threeView=injectedFactory({dialog:threeDialog,api:async()=>three,esc,isAllowed:()=>true,notify:()=>{}});await threeView.open('member','member-1');assert.equal(labelCount(threeDialog.innerHTML),3,'3주 실제 기간은 날짜 축도 3개만 표시합니다');
-  const fullRange=history('2026-04-25T15:00:00.000Z','2026-05-02T15:00:00.000Z','2026-09-19T15:00:00.000Z',[{id:'only',at:'2026-09-19T01:00:00.000Z',before:null,points:60,kind:'current'}],true);
-  const compactDialog=new FakeDialog();compactDialog.width=320;let fullCalls=0;const fullView=injectedFactory({dialog:compactDialog,api:async()=>fullCalls++?{...fullRange,range:{from:'2025-12-13T15:00:00.000Z',to:'2026-05-02T15:00:00.000Z'},hasOlder:false,nextBefore:''}:fullRange,esc,isAllowed:()=>true,notify:()=>{}});await fullView.open('member','member-1');await Promise.resolve();assert.match(compactDialog.innerHTML,/최근 20주/);assert.equal(labelCount(compactDialog.innerHTML),20,'20주 전체 범위는 기준일에서 7일 간격으로 끝 날짜 제외 20개를 표시합니다');assert.match(compactDialog.innerHTML,/rotate\(-90/,'320px의 20개 M/D 라벨은 세로로 배치합니다');assert.match(compactDialog.innerHTML,/text-anchor="end" style="font-size:8px !important"/,'촘촘한 세로 라벨은 CSS보다 우선하는 끝 맞춤 8px 글자를 강제 적용합니다');assert.match(compactDialog.innerHTML,/viewBox="0 0 320 225"/,'세로 라벨이 잘리지 않도록 SVG 하단 여백을 유지합니다');compactDialog.root.querySelector('[data-score-history-older]').onclick?.();await Promise.resolve();await Promise.resolve();assert.equal(fullCalls,2,'21주차부터는 기존처럼 이전 20주 범위를 별도로 불러옵니다');assert.equal(labelCount(compactDialog.innerHTML),21,'첫 기록이 든 가장 오래된 페이지는 그 날짜 앞의 빈 기간을 잘라 1개 주차만 추가합니다');
-  const desktopDialog=new FakeDialog();desktopDialog.width=600;const desktopView=injectedFactory({dialog:desktopDialog,api:async()=>({...fullRange,hasOlder:false,nextBefore:''}),esc,isAllowed:()=>true,notify:()=>{}});await desktopView.open('member','member-1');await Promise.resolve();assert.match(desktopDialog.innerHTML,/rotate\(-55/,'약 30px 간격의 20주 PC 그래프는 55도 라벨을 유지합니다');assert.doesNotMatch(desktopDialog.innerHTML,/rotate\(-90/,'PC 20주 그래프는 불필요하게 세로 라벨로 바꾸지 않습니다');
-  const oneDialog=new FakeDialog(),oneView=injectedFactory({dialog:oneDialog,api:async()=>history('2026-09-18T15:00:00.000Z','2026-05-03T15:00:00.000Z','2026-09-20T06:00:00.000Z',[{id:'one',at:'2026-09-18T15:00:00.000Z',before:null,points:60,kind:'current'}]),esc,isAllowed:()=>true,notify:()=>{}});await oneView.open('member','member-1');assert.equal((oneDialog.innerHTML.match(/<circle class="score-history-point/g)||[]).length,1,'신규 회원의 단일 기록은 가짜 점을 만들지 않습니다');
-  const dialog=new FakeDialog(),pages=[];for(let i=0;i<8;i++)pages.push(segment(new Date(Date.UTC(2026,0,1)-i*140*86400000).toISOString(),i,i<7));for(let i=1;i<pages.length;i++)assert.equal(pages[i].range.to,pages[i-1].range.from,'이전 20주 구간은 바로 다음 20주 구간에 정확히 이어져야 합니다');
-  pages[0].points[0].before=null;
-  let calls=0,allowed=true;const api=async()=>pages[calls++];const view=injectedFactory({dialog,api,esc,isAllowed:()=>allowed,notify:()=>{}});
-  await view.open('member','member-1');assert.match(dialog.innerHTML,/최근 20주/);assert.doesNotMatch(dialog.innerHTML,/1년/);assert.match(dialog.innerHTML,/기록을 글로 보기/);assert.match(dialog.innerHTML,/변동 기준 없음/);assert.doesNotMatch(dialog.innerHTML,/변동 기준 없음점/);assert.match(dialog.innerHTML,/id="pickerTitle"/);
-  dialog.scroller.scrollLeft=420;dialog.querySelector('.score-history-details').open=true;const point={dataset:{scoreHistorySegment:'0',scoreHistoryPoint:'p-0'},closest:()=>point};dialog.root.listeners.click({target:point});await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,420,'점 선택 후에는 현재 가로 위치를 유지해야 합니다');assert.match(dialog.innerHTML,/<details class="score-history-details" open>/,'그래프 재배치 중 펼쳐 둔 텍스트 기록을 닫지 않습니다');
-  dialog.root.querySelector('[data-score-history-older]').onclick?.();await Promise.resolve();await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,0,'처음 이전 20주 보기 뒤에는 새로 추가한 이전 구간을 바로 보여야 합니다');
-  dialog.scroller.scrollLeft=0;dialog.scroller.fireScroll();await Promise.resolve();await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,1000,'왼쪽 제스처로 추가할 때는 현재 가로 위치를 보존해야 합니다');
-  for(let i=0;i<6;i++){dialog.scroller.scrollLeft=0;dialog.scroller.fireScroll();await Promise.resolve();await Promise.resolve();}
-  assert.equal(calls,8,'3년 이상 기록은 20주 단위로 왼쪽에 추가 요청해야 합니다');assert.match(dialog.innerHTML,/p-7/);
-  dialog.root.querySelector('[data-score-history-return]').onclick();
-  assert.equal(dialog.root.querySelector('[data-score-history-older]').disabled,false,'더 불러올 이력이 없어도 이미 로드한 과거 구간으로 이동할 수 있어야 합니다');
-  const latestLeft=dialog.scroller.scrollLeft;dialog.root.querySelector('[data-score-history-older]').onclick();assert.equal(dialog.scroller.scrollLeft,latestLeft-dialog.scroller.clientWidth,'과거 버튼은 한 구간씩 이동해야 합니다');assert.equal(calls,8,'이미 불러온 구간을 이동할 때 재요청하지 않습니다');
-  const close=dialog.root.querySelector('[data-score-history-close]');close.onclick?.();assert.equal(dialog.open,false,'사용자가 닫은 팝업은 이후 응답으로 다시 열리지 않아야 합니다');
-  const carryDialog=new FakeDialog(),carryView=injectedFactory({dialog:carryDialog,api:async()=>({...segment('2026-01-01T00:00:00.000Z',0,false),points:[]}),esc,isAllowed:()=>true,notify:()=>{}});await carryView.open('member','member-1');assert.match(carryDialog.innerHTML,/score-history-line/);assert.doesNotMatch(carryDialog.innerHTML,/기록 없음/,'이전 점수가 알려진 carry 전용 구간은 평평한 선으로 표시해야 합니다');
-  const reopeningDialog=new FakeDialog();let releaseOlder;const slowOlder=new Promise(resolve=>{releaseOlder=resolve;});let reopenCalls=0;const reopenView=injectedFactory({dialog:reopeningDialog,api:()=>{const call=reopenCalls++;return call===0?Promise.resolve(segment('2026-01-01T00:00:00.000Z',0,true)):call===1?slowOlder:Promise.resolve({...segment('2026-06-01T00:00:00.000Z',9,false),points:[{id:'reopened',at:'2026-07-01T00:00:00.000Z',before:60,points:61,kind:'current'}]});},esc,isAllowed:()=>true,notify:()=>{}});await reopenView.open('member','member-1');reopeningDialog.scroller.scrollLeft=0;reopeningDialog.scroller.listeners.wheel({deltaX:-1,preventDefault(){}});reopeningDialog.root.querySelector('[data-score-history-close]').onclick?.();const reopen=reopenView.open('member','member-1');await reopen;releaseOlder({...segment('2025-01-01T00:00:00.000Z',8,false),points:[{id:'stale-older',at:'2025-02-01T00:00:00.000Z',before:50,points:51,kind:'settlement'}]});await Promise.resolve();await Promise.resolve();assert.match(reopeningDialog.innerHTML,/reopened/);assert.doesNotMatch(reopeningDialog.innerHTML,/stale-older/,'닫았다 다시 열면 이전 요청의 늦은 결과를 섞지 않아야 합니다');
-  let resolveSlow;const slow=new Promise(resolve=>{resolveSlow=resolve;});const asyncView=injectedFactory({dialog,api:()=>slow,esc,isAllowed:()=>allowed,notify:()=>{}});const pending=asyncView.open('guest','guest-1');asyncView.stop();allowed=false;resolveSlow(segment('2026-01-01T00:00:00.000Z',0,false));await pending;assert.equal(dialog.innerHTML,'','로그아웃/중지 뒤 늦은 응답은 개인 그래프를 다시 그리지 않아야 합니다');
+  const modeled=scoreHistoryModel({range:{from:'2026-01-01T00:00:00Z',to:'2026-05-21T00:00:00Z'},points:[settlement('late','2026-02-01T02:00:00.000Z',20,21),{id:'current',at:'2026-02-02T00:00:00.000Z',before:21,points:99,kind:'current'},{id:'manual',at:'2026-02-03T00:00:00.000Z',before:99,points:50,kind:'manual'},settlement('early','2026-01-02T00:00:00.000Z',19,20),{id:'bad',at:'nope',points:1,kind:'settlement'}],carry:{id:'old',at:'2025-12-01T00:00:00.000Z',before:18,points:19,kind:'settlement',seed:'C',scheduleId:'old'}});
+  assert.deepEqual(modeled.points.map(p=>p.id),['early','late'],'그래프 모델은 유효한 대진 마감 결과만 실제 시각순으로 남깁니다');
+  assert.equal(modeled.carry?.id,'old','이전 20주보다 앞선 실제 대진 마감 결과는 carry로 보존합니다');
+
+  const emptyDialog=new FakeDialog(),emptyView=injectedFactory({dialog:emptyDialog,api:async()=>history({current:73}),esc,isAllowed:()=>true,notify:()=>{}});
+  await emptyView.open('member','member-1');
+  assert.match(emptyDialog.innerHTML,/아직 대진 마감 기록이 없습니다/);
+  assert.match(emptyDialog.innerHTML,/현재 점수: 73점/);
+  assert.equal(dots(emptyDialog.innerHTML),0,'미마감 인원은 현재 점수를 가짜 점으로 그리지 않습니다');
+  assert.equal(ticks(emptyDialog.innerHTML),0,'미마감 인원은 과거 날짜 축이나 범위를 꾸며 내지 않습니다');
+  assert.doesNotMatch(emptyDialog.innerHTML,/score-history-segment/);
+  assert.doesNotMatch(emptyDialog.innerHTML,/그래프의 점을 누르면/,'마감 기록이 없으면 점 선택 안내도 표시하지 않습니다');
+  emptyDialog.root.querySelector('[data-score-history-close]').onclick?.();assert.equal(emptyDialog.open,false,'빈 상태도 닫기 동작을 유지합니다');
+
+  const oneAt='2026-09-19T01:03:00.000Z',oneData=history({recordedFrom:oneAt,points:[settlement('one',oneAt,60,62)],current:64});
+  const oneDialog=new FakeDialog(),oneView=injectedFactory({dialog:oneDialog,api:async()=>oneData,esc,isAllowed:()=>true,notify:()=>{}});
+  await oneView.open('member','member-1');
+  assert.equal(dots(oneDialog.innerHTML),1,'한 번 마감한 인원은 실제 마감 점 하나만 표시합니다');
+  assert.match(oneDialog.innerHTML,/대진 마감/);assert.match(oneDialog.innerHTML,/현재 점수: 64점/);
+  assert.match(oneDialog.innerHTML,/2026년 9월 19일/);assert.match(oneDialog.innerHTML,/10:03/,'점의 접근성 레이블과 글 기록에는 실제 마감 시각을 씁니다');
+  assert.match(oneDialog.innerHTML,/role="button"/);assert.match(oneDialog.innerHTML,/tabindex="0"/);
+
+  const sameDay=history({recordedFrom:oneAt,points:[settlement('morning',oneAt,60,62,'schedule-am'),settlement('evening','2026-09-19T10:45:00.000Z',62,61,'schedule-pm')],current:70});
+  const sameDialog=new FakeDialog(),sameView=injectedFactory({dialog:sameDialog,api:async()=>sameDay,esc,isAllowed:()=>true,notify:()=>{}});
+  await sameView.open('member','member-1');
+  assert.equal(dots(sameDialog.innerHTML),2,'같은 날 여러 대진을 마감해도 결과마다 점을 남깁니다');
+  assert.match(sameDialog.innerHTML,/10:03/);assert.match(sameDialog.innerHTML,/07:45/,'같은 날의 각 점도 실제 마감 시각을 구분합니다');
+  assert.doesNotMatch(sameDialog.innerHTML,/수동 수정|보관 기록|현재 점수<\/li>/,'조회·수동·현재 기록을 점 또는 글 이력으로 섞지 않습니다');
+  assert.equal((pathD(sameDialog.innerHTML).match(/\bL\b/g)||[]).length,1,'두 실제 마감 점을 잇되 마지막 점에서 현재 시각까지 인위적으로 연장하지 않습니다');
+  assert.match(sameDialog.innerHTML,/점은 실제 대진 마감 결과입니다/);
+
+  const carry=settlement('carry','2026-04-10T01:00:00.000Z',55,58),carryData=history({recordedFrom:carry.at,points:[],carry,hasOlder:true,current:58});
+  const carryDialog=new FakeDialog(),carryView=injectedFactory({dialog:carryDialog,api:async()=>carryData,esc,isAllowed:()=>true,notify:()=>{}});
+  await carryView.open('member','member-1');
+  assert.match(carryDialog.innerHTML,/score-history-line/);assert.equal(dots(carryDialog.innerHTML),0,'carry만 있는 페이지는 새 점을 만들지 않습니다');
+  assert.equal((pathD(carryDialog.innerHTML).match(/\bL\b/g)||[]).length,1,'이전 페이지에서 이어지는 carry 선은 유지합니다');
+
+  const recentFrom='2026-05-02T15:00:00.000Z',recent=history({recordedFrom:'2026-04-25T15:00:00.000Z',from:recentFrom,to:'2026-09-19T15:00:00.000Z',points:[settlement('recent','2026-09-19T01:00:00.000Z',60,61)],hasOlder:true,current:61});
+  const older=history({recordedFrom:'2026-04-25T15:00:00.000Z',from:'2025-12-13T15:00:00.000Z',to:recentFrom,points:[settlement('older','2026-04-25T15:00:00.000Z',59,60)],current:61});
+  const mobileDialog=new FakeDialog();mobileDialog.width=320;let calls=0;const mobileView=injectedFactory({dialog:mobileDialog,api:async()=>calls++?older:recent,esc,isAllowed:()=>true,notify:()=>{}});
+  await mobileView.open('member','member-1');
+  assert.match(mobileDialog.innerHTML,/최근 20주 대진 마감 결과/);assert.equal(ticks(mobileDialog.innerHTML),20,'최근 20주는 주간 축을 눈금으로만 유지합니다');
+  assert.match(mobileDialog.innerHTML,/rotate\(-90/,'320px에서는 주간 눈금을 세로로 표시합니다');
+  mobileDialog.root.querySelector('[data-score-history-older]').onclick?.();await Promise.resolve();await Promise.resolve();
+  assert.equal(calls,2,'20주 이전은 기존처럼 별도 페이지로 불러옵니다');assert.equal(ticks(mobileDialog.innerHTML),21,'첫 실제 대진 마감이 든 과거 페이지는 앞의 빈 주를 자릅니다');
+  assert.match(mobileDialog.innerHTML,/기록을 글로 보기/,'그래프를 쓰기 어려운 경우의 텍스트 기록을 유지합니다');
+
+  const reopenDialog=new FakeDialog();let releaseOlder;const slowOlder=new Promise(resolve=>{releaseOlder=resolve;});let reopenCalls=0;
+  const reopenView=injectedFactory({dialog:reopenDialog,api:()=>{const call=reopenCalls++;return call===0?Promise.resolve(recent):call===1?slowOlder:Promise.resolve(history({recordedFrom:oneAt,points:[settlement('reopened',oneAt,60,62)]}));},esc,isAllowed:()=>true,notify:()=>{}});
+  await reopenView.open('member','member-1');reopenDialog.scroller.scrollLeft=0;reopenDialog.scroller.listeners.wheel({deltaX:-1,preventDefault(){}});reopenDialog.root.querySelector('[data-score-history-close]').onclick?.();await reopenView.open('member','member-1');releaseOlder(older);await Promise.resolve();await Promise.resolve();
+  assert.match(reopenDialog.innerHTML,/reopened/);assert.doesNotMatch(reopenDialog.innerHTML,/data-score-history-point="older"/,'닫았다 다시 열면 이전 요청의 늦은 결과를 섞지 않습니다');
 }

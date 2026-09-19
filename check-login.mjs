@@ -260,18 +260,19 @@ if(process.argv.includes('--serve')){
     // Opt-in browser QA only: this database is always in-memory, never production.
     const at=new Date().toISOString(),id='history-preview';
     db.prepare('INSERT INTO ranking_members(member_id,name,points,seed,rank,previous_rank,updated_at) VALUES(?,?,?,?,?,?,?)').run(id,'그래프 테스트',75,'C+',999,999,at);
-    db.prepare('DELETE FROM score_point_history WHERE person_id=?').run(id);
-    const insert=db.prepare('INSERT INTO score_point_history(person_type,person_id,recorded_at,points_before,points_after,kind) VALUES(?,?,?,?,?,?)');
+    const insert=(personId,at,before,points,suffix)=>{
+      const scheduleId=personId+'-'+suffix;
+      db.prepare('INSERT INTO ranking_settlements(schedule_id,settled_at,operation) VALUES(?,?,?)').run(scheduleId,at,scheduleId);
+      db.prepare('INSERT INTO ranking_events(schedule_id,member_id,attendance_points,win_points,loss_points,total_points,points_before,points_after,rank_before,rank_after,seed_before,seed_after,created_at) VALUES(?,?,1,0,0,?,?,?,1,1,?,?,?)').run(scheduleId,personId,points-before,before,points,'C','C',at);
+    };
     let previous=45;
-    for(let week=150;week>=0;week--){const points=week===0?75:Math.round(60+15*Math.sin(week/4));insert.run('member',id,new Date(Date.now()-week*7*86400000).toISOString(),previous,points,'change');previous=points;}
+    for(let week=150;week>=0;week--){const points=week===0?75:Math.round(60+15*Math.sin(week/4));insert(id,new Date(Date.now()-week*7*86400000).toISOString(),previous,points,week);previous=points;}
     // Short and boundary histories make the progressive weekly axis visible in browser QA.
     const kstMidnight=Math.floor((Date.now()+9*3600000)/86400000)*86400000-9*3600000;
     for(const weeks of [1,2,3,20,21]){
       const fixtureId='history-weeks-'+weeks;
       db.prepare('INSERT INTO ranking_members(member_id,name,points,seed,rank,previous_rank,updated_at) VALUES(?,?,?,?,?,?,?)').run(fixtureId,weeks+'주 테스트',75,'C+',1000+weeks,1000+weeks,at);
-      db.prepare('DELETE FROM score_point_history WHERE person_id=?').run(fixtureId);
-      insert.run('member',fixtureId,new Date(kstMidnight-(weeks-1)*7*86400000).toISOString(),null,60,'initial');
-      insert.run('member',fixtureId,at,60,75,'change');
+      for(let week=0;week<weeks;week++)insert(fixtureId,new Date(kstMidnight-(weeks-1-week)*7*86400000).toISOString(),60+week,61+week,week);
     }
   }
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';

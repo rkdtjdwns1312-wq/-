@@ -3,14 +3,15 @@ const num=value=>value==null?null:(Number.isFinite(Number(value))?Number(value):
 
 export function scoreHistoryModel(data){
   const range=data?.range||{},from=iso(range.from),to=iso(range.to);
-  const points=(Array.isArray(data?.points)?data.points:[]).filter(p=>iso(p?.at)&&num(p?.points)!==null).sort((a,b)=>String(a.at).localeCompare(String(b.at)));
-  return {from,to,points,carry:data?.carry&&num(data.carry.points)!==null?data.carry:null,hasOlder:Boolean(data?.hasOlder),nextBefore:typeof data?.nextBefore==='string'?data.nextBefore:'',recordedFrom:typeof data?.recordedFrom==='string'?data.recordedFrom:''};
+  const valid=p=>typeof p?.id==='string'&&p.id.length>0&&p.kind==='settlement'&&iso(p.at)&&num(p.points)!==null;
+  const points=(Array.isArray(data?.points)?data.points:[]).filter(valid).sort((a,b)=>String(a.at).localeCompare(String(b.at))||String(a.id).localeCompare(String(b.id)));
+  return {from,to,points,carry:valid(data?.carry)?data.carry:null,hasOlder:Boolean(data?.hasOlder),nextBefore:typeof data?.nextBefore==='string'?data.nextBefore:'',recordedFrom:typeof data?.recordedFrom==='string'&&iso(data.recordedFrom)?data.recordedFrom:''};
 }
 
 export function createScoreHistory({dialog,api,esc=s=>String(s),isAllowed=()=>true,notify=()=>{}}={}){
   // boards.js embeds this factory with toString(), so every runtime helper stays inside it.
   const DAY=86400000;
-  const sourceLabel={initial:'처음 기록',settlement:'정모 정산',manual:'수동 수정',snapshot:'보관 기록',change:'점수 변경',current:'현재 점수',baseline:'기준 점수'};
+  const sourceLabel={settlement:'대진 마감'};
   const iso=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?null:d;};
   const dateKst=value=>new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric'}).format(new Date(value));
   const stampKst=value=>new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value));
@@ -18,7 +19,7 @@ export function createScoreHistory({dialog,api,esc=s=>String(s),isAllowed=()=>tr
   const kstDay=value=>{const part=kstDateParts(value);return part?new Date(Date.UTC(part.year,part.month-1,part.day)-9*60*60*1000):null;};
   const dateMd=value=>{const part=kstDateParts(value);return part?part.month+'/'+part.day:'';};
   const num=value=>value==null?null:(Number.isFinite(Number(value))?Number(value):null);
-  const model=data=>{const range=data?.range||{},from=iso(range.from),to=iso(range.to),points=(Array.isArray(data?.points)?data.points:[]).filter(p=>iso(p?.at)&&num(p?.points)!==null).sort((a,b)=>String(a.at).localeCompare(String(b.at)));return {from,to,points,carry:data?.carry&&num(data.carry.points)!==null?data.carry:null,hasOlder:Boolean(data?.hasOlder),nextBefore:typeof data?.nextBefore==='string'?data.nextBefore:'',recordedFrom:typeof data?.recordedFrom==='string'?data.recordedFrom:''};};
+  const model=data=>{const range=data?.range||{},from=iso(range.from),to=iso(range.to),valid=p=>typeof p?.id==='string'&&p.id.length>0&&p.kind==='settlement'&&iso(p.at)&&num(p.points)!==null,points=(Array.isArray(data?.points)?data.points:[]).filter(valid).sort((a,b)=>String(a.at).localeCompare(String(b.at))||String(a.id).localeCompare(String(b.id)));return {from,to,points,carry:valid(data?.carry)?data.carry:null,hasOlder:Boolean(data?.hasOlder),nextBefore:typeof data?.nextBefore==='string'?data.nextBefore:'',recordedFrom:typeof data?.recordedFrom==='string'&&iso(data.recordedFrom)?data.recordedFrom:''};};
   let stopped=false,request=0,owner=0,state=null,selected=null,loadingOlder=false,chartWidth=600,resizeObserver=null,observedScroller=null;
   const safe=value=>esc(String(value??''));
   const current=()=>!stopped&&dialog?.open&&dialog.querySelector?.('[data-score-history-owner="'+owner+'"]');
@@ -51,7 +52,7 @@ export function createScoreHistory({dialog,api,esc=s=>String(s),isAllowed=()=>tr
     const x=p=>left+Math.max(0,Math.min(1,(iso(p.at).getTime()-from)/span))*(right-left);
     const y=v=>top+(max-v)/(max-min)*(bottom-top);
     const ticks=weeklyTicks(range,width,left,right).map((tick,i,all)=>{const vertical=tick.labelMode==='vertical',anchor=vertical?'end':i===0?'start':i===all.length-1?'end':'middle',y=vertical?180:184,rotate=vertical?' transform="rotate(-90 '+tick.px+' '+y+')"':tick.labelMode==='angled'?' transform="rotate(-55 '+tick.px+' '+y+')"':'';return '<line class="score-history-grid" x1="'+tick.px+'" y1="'+top+'" x2="'+tick.px+'" y2="'+bottom+'"/><text class="score-history-axis-label score-history-week-label'+(vertical?' score-history-week-label-vertical':'')+'" x="'+tick.px+'" y="'+y+'" text-anchor="'+anchor+'" style="font-size:'+tick.fontSize+'px !important"'+rotate+'>'+safe(dateMd(tick.at))+'</text>';}).join('');
-    let path='',lastValue=null;if(segment.carry){lastValue=num(segment.carry.points);path+='M '+left+' '+y(lastValue)+' ';}for(const p of segment.points){lastValue=num(p.points);path+=(path?'L ':'M ')+x(p)+' '+y(lastValue)+' ';}if(lastValue!==null)path+='L '+right+' '+y(lastValue)+' ';
+    let path='',lastValue=null;if(segment.carry){lastValue=num(segment.carry.points);path+='M '+left+' '+y(lastValue)+' ';}for(const p of segment.points){lastValue=num(p.points);path+=(path?'L ':'M ')+x(p)+' '+y(lastValue)+' ';}if(segment.carry&&!segment.points.length)path+='L '+right+' '+y(lastValue)+' ';
     const dots=segment.points.map((p,i)=>'<circle class="score-history-point'+(selected?.id===p.id?' selected':'')+'" data-score-history-point="'+safe(p.id)+'" data-score-history-segment="'+index+'" cx="'+x(p)+'" cy="'+y(num(p.points))+'" r="6" tabindex="0" role="button" aria-label="'+safe(pointText(p))+'"/>').join('');
     const labels=values.length?'<text class="score-history-axis-label" x="'+(left-5)+'" y="'+(top+4)+'" text-anchor="end">'+max+'</text><text class="score-history-axis-label" x="'+(left-5)+'" y="'+bottom+'" text-anchor="end">'+min+'</text>':'';
     const empty=values.length?'':'<text class="score-history-empty-label" x="'+((left+right)/2)+'" y="'+((top+bottom)/2)+'" text-anchor="middle">이 기간에 점수 기록이 없습니다.</text>';
@@ -60,18 +61,22 @@ export function createScoreHistory({dialog,api,esc=s=>String(s),isAllowed=()=>tr
   function draw(savedPosition=null){
     if(!current()||!state)return;
     const detailsOpen=Boolean(dialog.querySelector('.score-history-details')?.open);
-    const restore=savedPosition||null,person=state.person||{},all=state.segments.flatMap(s=>s.points),carried=state.segments.filter(s=>s.carry).map(s=>s.carry),scale=(all.length||carried.length)?domain():null,latest=state.segments[state.segments.length-1],latestRange=latest&&visibleRange(latest);
+    const restore=savedPosition||null,person=state.person||{},all=state.segments.flatMap(s=>s.points),carried=state.segments.filter(s=>s.carry).map(s=>s.carry),hasSettlements=Boolean(state.recordedFrom&&(all.length||carried.length)),scale=(all.length||carried.length)?domain():null,latest=state.segments[state.segments.length-1],latestRange=latest&&visibleRange(latest);
     const popup=selected?'<div class="score-history-popup" role="status">'+safe(pointText(selected))+'</div>':'<div class="score-history-popup" role="status">그래프의 점을 누르면 해당 기록을 볼 수 있어요.</div>';
-    const noData=!all.length&&!carried.length?'<p class="score-history-empty">표시할 점수 기록이 없습니다.</p>':'';
-    const note=state.recordedFrom?'<p class="score-history-note">보관된 기록부터 표시합니다. 없는 과거 기록은 복원할 수 없습니다.</p>':'';
-    const summary=latestRange?.partial?'첫 기록부터 누적 중인 실제 기간을 표시합니다.':'최근 20주 점수 변화를 확인합니다.';
-    const carriedText=carried.map(p=>'<li>구간 시작 기준 '+safe(num(p.points))+'점</li>').join('');
-    dialog.innerHTML='<div data-score-history-owner="'+owner+'" class="score-history-dialog"><div class="dialog-head"><h2 id="pickerTitle">'+safe(person.name||'점수')+' · 점수 변화</h2><button type="button" data-score-history-close aria-label="닫기">×</button></div><p class="score-history-summary">'+summary+'</p>'+popup+noData+'<div class="score-history-scroll" tabindex="0" aria-label="점수 변화 기간. 왼쪽으로 이동하면 이전 20주 기록을 불러옵니다."><div class="score-history-track">'+state.segments.map((segment,index)=>chart(segment,index,scale,chartWidth)).join('')+'</div></div>'+note+'<details class="score-history-details"'+(detailsOpen?' open':'')+'><summary>기록을 글로 보기</summary><ul>'+carriedText+all.map(p=>'<li>'+safe(pointText(p))+'</li>').join('')+'</ul></details><div class="score-history-actions"><button type="button" data-score-history-older'+(!state.hasOlder||loadingOlder?' disabled':'')+'>이전 20주 보기</button><button type="button" class="score-history-return" data-score-history-return>최근 20주로</button><button type="button" data-score-history-close>닫기</button></div></div>';
+    const currentScore=num(person.points),currentText=currentScore===null?'':'<p class="score-history-note">현재 점수: '+safe(currentScore)+'점 · 수동 조정 등으로 마지막 대진 마감 점수와 다를 수 있습니다.</p>';
+    const noData=hasSettlements?'':'<p class="score-history-empty">아직 대진 마감 기록이 없습니다.</p>';
+    const note=hasSettlements?'<p class="score-history-note">점은 실제 대진 마감 결과입니다. 조회·수동 조정 시각은 점으로 표시하지 않습니다.</p>':'';
+    const summary=hasSettlements?(latestRange?.partial?'첫 대진 마감부터 누적 중인 실제 기간을 표시합니다.':'최근 20주 대진 마감 결과를 확인합니다.'):'대진을 마감하면 그 결과부터 점수 변화를 확인할 수 있어요.';
+    const carriedText=carried.map(p=>'<li>이전 구간 대진 마감 결과 · '+safe(num(p.points))+'점</li>').join('');
+    const graph=hasSettlements?'<div class="score-history-scroll" tabindex="0" aria-label="대진 마감 결과 기간. 왼쪽으로 이동하면 이전 20주 기록을 불러옵니다."><div class="score-history-track">'+state.segments.map((segment,index)=>chart(segment,index,scale,chartWidth)).join('')+'</div></div>'+note+'<details class="score-history-details"'+(detailsOpen?' open':'')+'><summary>기록을 글로 보기</summary><ul>'+carriedText+all.map(p=>'<li>'+safe(pointText(p))+'</li>').join('')+'</ul></details>':'';
+    const navigation=hasSettlements?'<button type="button" data-score-history-older'+(!state.hasOlder||loadingOlder?' disabled':'')+'>이전 20주 보기</button><button type="button" class="score-history-return" data-score-history-return>최근 20주로</button>':'';
+    dialog.innerHTML='<div data-score-history-owner="'+owner+'" class="score-history-dialog"><div class="dialog-head"><h2 id="pickerTitle">'+safe(person.name||'점수')+' · 점수 변화</h2><button type="button" data-score-history-close aria-label="닫기">×</button></div><p class="score-history-summary">'+summary+'</p>'+currentText+(hasSettlements?popup:'')+noData+graph+'<div class="score-history-actions">'+navigation+'<button type="button" data-score-history-close>닫기</button></div></div>';
     const root=current();if(!root)return;
+    root.querySelectorAll('[data-score-history-close]').forEach(b=>b.onclick=closeOwned);
     const freshScroller=dialog.querySelector('.score-history-scroll');
+    if(!freshScroller)return;
     const olderButton=root.querySelector('[data-score-history-older]');
     const syncNavigation=()=>{olderButton.disabled=loadingOlder||(!state.hasOlder&&freshScroller.scrollLeft<=24);};
-    root.querySelectorAll('[data-score-history-close]').forEach(b=>b.onclick=closeOwned);
     root.querySelector('[data-score-history-return]').onclick=()=>{freshScroller.scrollLeft=Math.max(0,freshScroller.scrollWidth-freshScroller.clientWidth);syncNavigation();};
     olderButton.onclick=()=>{const viewport=freshScroller.clientWidth||chartWidth;if(freshScroller.scrollLeft>24){freshScroller.scrollLeft=Math.max(0,freshScroller.scrollLeft-viewport);syncNavigation();}else loadOlder(null);};
     const choose=e=>{const node=e.target.closest?.('[data-score-history-point]');if(!node)return;const segment=state.segments[Number(node.dataset.scoreHistorySegment)],point=segment?.points.find(p=>String(p.id)===node.dataset.scoreHistoryPoint);if(point){selected=point;draw(position());}};
