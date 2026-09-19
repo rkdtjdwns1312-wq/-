@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
-import worker from './dist/server/index.js';
+import worker from './test-member-worker.mjs';
+import rawWorker from './dist/server/index.js';
 import { client } from './dist/server/boards-client.js';
 import { adminKeyFor } from './dist/server/admin-login.js';
 import { runRankingProtectionChecks } from './check-ranking-protection.mjs';
@@ -17,6 +18,8 @@ import { runClientAuditChecks } from './check-client-audit.mjs';
 import { runSubstitutionChecks } from './check-substitution.mjs';
 import { runEmergencyUIChecks } from './check-emergency-ui.mjs';
 import { runOperatorNavChecks } from './check-operator-nav.mjs';
+import { runMemberAccessChecks } from './check-member-access.mjs';
+import { runMemberUIChecks } from './check-member-ui.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -244,6 +247,8 @@ await runClientAuditChecks();
 await runSubstitutionChecks();
 await runEmergencyUIChecks();
 await runOperatorNavChecks();
+await runMemberAccessChecks();
+await runMemberUIChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
@@ -257,7 +262,7 @@ if(process.argv.includes('--serve')){
     }
     try{const chunks=[];for await(const chunk of req)chunks.push(chunk);
       const previewOrigin='http://'+(req.headers.host||'localhost:'+previewPort);
-      const r=await worker.fetch(new Request(previewOrigin+req.url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);
+      const r=await rawWorker.fetch(new Request(previewOrigin+req.url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);
       res.writeHead(r.status,Object.fromEntries(r.headers));res.end(Buffer.from(await r.arrayBuffer()));
     }catch{res.writeHead(500);res.end('Preview unavailable');}
   }).listen(previewPort,'127.0.0.1',()=>console.log('Local URL: http://localhost:'+previewPort));

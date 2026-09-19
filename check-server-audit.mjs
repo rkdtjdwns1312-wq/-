@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import worker from './dist/server/index.js';
+import worker from './test-member-worker.mjs';
 import { adminKeyFor } from './dist/server/admin-login.js';
 
 function harness(){
@@ -115,7 +115,7 @@ export async function runServerAuditChecks(){
       for(const path of ['/api/people','/api/people/update','/api/people/hide','/api/people/promote','/api/posts/x/settle','/api/posts/x/unsettle','/api/operator-role','/api/backups'])assert.equal((await h.call(path,'POST',{},false)).status,403,path+' requires privilege');
       for(const path of ['/api/backups','/api/backups/missing','/api/people/history?type=member&id=member-1'])assert.equal((await h.call(path,'GET',undefined,false)).status,403);
       const originalError=console.error;console.error=()=>{};try{
-        const r=await worker.fetch(new Request('https://audit.test/api/people'),{...h.env,DB:{prepare(){throw Error('injected DB failure');}}});assert.equal(r.status,503);assert.equal(typeof(await r.json()).error,'string');
+        const r=await worker.fetch(new Request('https://audit.test/api/people',{headers:{'x-kokkiri-editor':h.env.EDITOR_KEY}}),{...h.env,DB:{prepare(){throw Error('injected DB failure');}}});assert.equal(r.status,503);assert.equal(typeof(await r.json()).error,'string');
       }finally{console.error=originalError;}
     }finally{h.sqlite.close();}
   }

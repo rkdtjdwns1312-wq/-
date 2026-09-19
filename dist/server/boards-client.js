@@ -1,5 +1,23 @@
-export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
+export function memberOnlyHash(hash){return hash==='#schedule'||hash==='#live'||hash==='#seed';}
+
+export function createMemberAccess(EDITOR,initialMember=false){
+  let member=Boolean(EDITOR||initialMember);
+  return {
+    allowed:()=>Boolean(EDITOR||member),
+    member:()=>member,
+    update:value=>{member=Boolean(EDITOR||value);return member;},
+    revoke:()=>{if(!EDITOR)member=false;return member;}
+  };
+}
+
+export function memberMenuLabel(member){return member?'회원 로그아웃':'회원권한';}
+
+export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false){
   const scheduleTools=createScheduleTools();
+  const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed';
+  const memberMenuLabel=member=>member?'회원 로그아웃':'회원권한';
+  const memberAccess=(()=>{let member=Boolean(EDITOR||MEMBER);return {allowed:()=>Boolean(EDITOR||member),member:()=>member,update:value=>{member=Boolean(EDITOR||value);return member;},revoke:()=>{if(!EDITOR)member=false;return member;}};})();
+  let refreshMemberMenu=()=>{},memberDialogOwner=0;
   const $=id=>document.getElementById(id),app=$('app'),dialog=$('picker');
   const extraStyle=document.createElement('style');extraStyle.textContent='.ranking-table-wrap{overflow:auto}.ranking-table{width:100%;border-collapse:collapse;min-width:620px}.ranking-table th{background:#eafff1;color:#245c39;font-weight:700}.ranking-table th,.ranking-table td{padding:12px 14px;text-align:center;border-bottom:1px solid #e0ebe4;white-space:nowrap}.ranking-table th:nth-child(3),.ranking-table td:nth-child(3){text-align:left}.rank-movement{color:#e5484d;font-weight:700}.rank-down{color:#2f6fed;font-weight:700}.seed-badge{display:inline-block;min-width:2.7em;padding:2px 7px;border-radius:999px;background:#eafff1;color:#176337;font-weight:700}.match-result{display:flex;justify-content:center;align-items:center;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #dcece1}.result-label{width:100%;color:#587261;font-size:.875rem}.winner-button{padding:7px 10px;font-size:.875rem}.winner-button.selected{background:#03ac50;color:#fff;border-color:#03ac50}.settled-badge{display:inline-block;margin:8px 0;padding:4px 9px;border-radius:999px;background:#eafff1;color:#176337;font-size:.875rem;font-weight:600}@media(max-width:650px){.ranking-table th,.ranking-table td{padding:10px 9px}.winner-button{font-size:.8rem;padding:6px 8px}}';extraStyle.textContent+='.seed-actions{display:inline-flex;gap:4px;margin-left:7px;vertical-align:middle}.person-manage{padding:3px 7px;font-size:.68rem;border-radius:999px;font-weight:700}.history-list{list-style:none;padding:0;margin:10px 0}.history-list li{padding:10px 0;border-bottom:1px solid #e0ebe4;font-size:.88rem}.history-list li:last-child{border-bottom:0}.history-meta{display:block;color:#708078;font-size:.78rem;margin-bottom:2px}.history-reason{display:block;color:#4f6759;margin-top:3px;overflow-wrap:anywhere}';document.head.append(extraStyle);
   function updateDaysTogether(){
@@ -26,29 +44,63 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
       }catch(error){if(active()){errorOutput.textContent=error.message;password.focus();password.select();}}
       finally{if(active()){submit.disabled=false;submit.textContent=goLabel;}}
     };
-    dialog.onclose=()=>{dialog.onclose=null;dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
+    dialog.onclose=()=>{if(dialog.open)return;dialog.onclose=null;dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
+  }
+  function openMemberLoginDialog(focusBack){
+    const owner=++memberDialogOwner,loginEpoch=++memberAuthEpoch;
+    dialog.innerHTML='<form id="memberLoginForm"><div class="dialog-head"><h2 id="pickerTitle">회원권한</h2><button type="button" id="closeMemberLogin" aria-label="닫기">×</button></div><label for="memberPassword">회원전용 비밀번호</label><input id="memberPassword" type="password" autocomplete="current-password" required maxlength="128" autofocus><p id="memberLoginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="memberLoginSubmit" class="primary">회원전용 입장</button><button type="button" id="cancelMemberLogin">취소</button></div></form>';
+    const form=$('memberLoginForm'),password=$('memberPassword'),submit=$('memberLoginSubmit'),errorOutput=$('memberLoginError'),closeButton=$('closeMemberLogin'),cancelButton=$('cancelMemberLogin');
+    let working=false,composing=false;
+    const clearPending=()=>{if(memberLoginPendingOwner===owner){memberLoginPending=false;memberLoginPendingOwner=0;}};
+    const active=()=>dialog.open&&dialog.querySelector('#memberLoginForm')===form;
+    const close=()=>{if(!working)dialog.close();};
+    closeButton.onclick=close;cancelButton.onclick=close;
+    dialog.oncancel=event=>{if(working)event.preventDefault();};
+    form.addEventListener('compositionstart',()=>{composing=true;});form.addEventListener('compositionend',()=>{composing=false;});
+    form.onsubmit=async event=>{
+      event.preventDefault();if(working||composing||event.isComposing||!active())return;
+      working=true;memberLoginPending=true;memberLoginPendingOwner=owner;submit.disabled=true;closeButton.disabled=true;cancelButton.disabled=true;submit.textContent='확인 중…';errorOutput.textContent='';
+      try{
+        const result=await api('/api/member-login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:password.value})});
+        if(!active()||loginEpoch!==memberAuthEpoch){clearPending();return;}
+        if(!result?.member)throw Error('회원권한을 확인하지 못했습니다.');
+        memberAuthEpoch++;memberSessionRead++;memberAccess.update(true);refreshMemberMenu();const target=pendingMemberTarget||'#home';pendingMemberTarget='';
+        clearPending();
+        dialog.oncancel=null;dialog.close();
+        if(location.hash===target)route();else location.hash=target;
+      }catch(error){clearPending();if(active()){errorOutput.textContent=error.message||'회원권한을 확인하지 못했습니다.';password.focus();password.select();}}
+      finally{if(active()){working=false;submit.disabled=false;closeButton.disabled=false;cancelButton.disabled=false;submit.textContent='회원전용 입장';}}
+    };
+    dialog.onclose=()=>{if(dialog.open||owner!==memberDialogOwner||dialog.querySelector('#memberLoginForm')!==form)return;dialog.onclose=null;dialog.innerHTML='';if(focusBack)focusBack();};dialog.showModal();
   }
   if(!EDITOR&&!ADMIN){
-    // 요청 075: 항상 노출된 버튼 대신 작은 사람 실루엣 버튼 → 누르면 두 항목(운영진권한 위 / 홈페이지관리자 권한 아래).
+    // 요청 116: 회원권한을 운영진권한 바로 위에 둔다.
     const fab=document.createElement('button');
     fab.className='access-fab';fab.type='button';fab.setAttribute('aria-label','로그인');fab.setAttribute('aria-haspopup','menu');fab.setAttribute('aria-expanded','false');
     fab.innerHTML='<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5Z"/></svg>';
     const menu=document.createElement('div');menu.className='access-menu';menu.hidden=true;menu.setAttribute('role','menu');
+    const memberItem=document.createElement('button');memberItem.type='button';memberItem.className='access-item';memberItem.textContent=memberMenuLabel(memberAccess.member());memberItem.setAttribute('role','menuitem');
+    refreshMemberMenu=()=>{memberItem.textContent=memberMenuLabel(memberAccess.member());};
     const opItem=document.createElement('button');opItem.type='button';opItem.className='access-item';opItem.textContent='운영진권한';opItem.setAttribute('role','menuitem');
     const adItem=document.createElement('button');adItem.type='button';adItem.className='access-item';adItem.textContent='홈페이지관리자 권한';adItem.setAttribute('role','menuitem');
-    menu.append(opItem,adItem);
+    menu.append(memberItem,opItem,adItem);
     document.body.append(menu,fab);
     const closeMenu=()=>{menu.hidden=true;fab.setAttribute('aria-expanded','false');};
     fab.onclick=e=>{e.stopPropagation();const willOpen=menu.hidden;menu.hidden=!willOpen;fab.setAttribute('aria-expanded',String(willOpen));};
     document.addEventListener('click',e=>{if(!menu.hidden&&!menu.contains(e.target)&&e.target!==fab)closeMenu();});
     document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
+    memberItem.onclick=async()=>{
+      closeMenu();
+      if(!memberAccess.member())return openMemberLoginDialog(()=>fab.focus());
+      await logoutMember(memberItem);
+    };
     opItem.onclick=()=>{closeMenu();openLoginDialog('운영진권한','운영진 비밀번호','/api/operator-login',/^\/operate-[a-zA-Z0-9_-]+$/,'운영진 화면으로',()=>fab.focus());};
     adItem.onclick=()=>{closeMenu();openLoginDialog('홈페이지관리자 권한','관리자 비밀번호','/api/admin-login',/^\/administrate-[a-zA-Z0-9_-]+$/,'관리자 화면으로',()=>fab.focus());};
   }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  // 요청 073: 운영진(왕관)은 DB(is_operator)로 관리. 초기값은 아래 6명, 데이터 로드 시 갱신.
-  let OPERATORS=new Set(['로토','백구','구구','이코','뉴키','단우']);
-  function syncOperators(list){const ms=(list||[]).filter(p=>p.type==='member'||('member_id' in p));if(ms.length&&('is_operator' in ms[0]))OPERATORS=new Set(ms.filter(p=>p.is_operator).map(p=>p.name));}
+  // 운영진(왕관)은 DB(is_operator) 응답으로만 표시한다.
+  let OPERATORS=new Set();
+  function syncOperators(list){const ms=(list||[]).filter(p=>p.type==='member'||('member_id' in p));if(!ms.length){OPERATORS=new Set();return;}if(ms.some(p=>Object.hasOwn(p,'is_operator')))OPERATORS=new Set(ms.filter(p=>p.is_operator).map(p=>p.name));}
   const crown=name=>OPERATORS.has(name)?'<span class="crown" title="운영진" aria-label="운영진">👑</span>':'';
   const nameHTML=name=>{const s=String(name??''),m=/^(.*[^\s])\(([^)\s]+)\)$/.exec(s);return m?esc(m[1])+'<span class="region">'+esc(m[2])+'</span>':esc(s);};
   const seedHTML=seed=>{const s=String(seed==null?'':seed),m=/^(.*[^+\-])([+\-])$/.exec(s);return m?esc(m[1])+'<sup class="seed-mod">'+esc(m[2])+'</sup>':esc(s);};
@@ -81,17 +133,64 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     closeList();
     return parts.join('');
   }
-  let people=[],peopleRead=0,draft=null,editRoster=people,dirty=false,routeToken=0,detailRead=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false,emergencySubstituteOpening=false;
+  let people=[],peopleRead=0,draft=null,editRoster=people,dirty=false,routeToken=0,detailRead=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false,emergencySubstituteOpening=false,pendingMemberTarget='',activeMemberContent=false,memberSessionRead=0,memberAuthEpoch=0,memberLoginPending=false,memberLoginPendingOwner=0;
   let liveView=null;
   const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
+  function renderPublicHome(){
+    if(location.hash==='#home')route();else location.hash='#home';
+  }
+  function renderCurrentPublicRoute(){route();}
+  function showMemberGate(){
+    stopPoll();app.innerHTML='';
+    if(dialog.open&&dialog.querySelector('#memberOnlyGate'))return;
+    if(dialog.open)dialog.close();
+    dialog.innerHTML='<div id="memberOnlyGate" class="confirm-box"><p class="confirm-msg">회원만 볼 수 있는 메뉴입니다</p><div class="confirm-actions"><button type="button" id="memberOnlyConfirm" class="primary">확인</button></div></div>';
+    const owner=++memberDialogOwner,gate=$('memberOnlyGate'),confirm=$('memberOnlyConfirm');
+    const close=()=>{if(dialog.open)dialog.close();};
+    const finish=()=>{if(dialog.open||owner!==memberDialogOwner||dialog.querySelector('#memberOnlyGate')!==gate)return;dialog.onclose=null;dialog.innerHTML='';renderPublicHome();};
+    confirm.onclick=close;dialog.oncancel=null;dialog.onclose=finish;dialog.showModal();confirm.focus();
+  }
+  function invalidateMemberAccess(){
+    if(EDITOR)return;
+    memberAuthEpoch++;memberSessionRead++;memberAccess.revoke();refreshMemberMenu();people=[];editRoster=people;OPERATORS=new Set();draft=null;dirty=false;activeMemberContent=false;peopleRead++;detailRead++;routeToken++;stopPoll();app.innerHTML='';
+  }
+  function gateProtectedRoute(hash){pendingMemberTarget=hash;activeMemberContent=false;detailRead++;stopPoll();showMemberGate();}
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
-  async function api(path,options){const r=await fetch(path,options);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}if(!r.ok){const error=Error(x.error||'요청에 실패했습니다.');error.status=r.status;throw error;}return x;}
+  async function api(path,options){
+    const authEpoch=memberAuthEpoch,requestRoute=routeToken,requestHash=location.hash;
+    const target=new URL(path,location.href),sameApi=target.origin===location.origin&&target.pathname.startsWith('/api/');
+    const next={...(options||{})};
+    if(EDITOR&&sameApi){const headers=new Headers(next.headers||{});headers.set('x-kokkiri-editor',EDITOR);next.headers=headers;}
+    const r=await fetch(path,next);let x;try{x=await r.json();}catch{throw Error('응답을 확인하지 못했습니다. 다시 시도해주세요.');}
+    if(!r.ok){const error=Error(x.error||'요청에 실패했습니다.');error.status=r.status;error.code=x&&x.code;if(error.code==='MEMBERS_ONLY'&&authEpoch===memberAuthEpoch){const ownsCurrentRoute=requestRoute===routeToken&&requestHash===location.hash,currentHash=ownsCurrentRoute?requestHash:location.hash,directPrivateDetail=ownsCurrentRoute&&requestHash.startsWith('#post/')&&/^\/api\/posts\/[a-zA-Z0-9-]{1,80}$/.test(target.pathname),currentPrivate=activeMemberContent||memberOnlyHash(currentHash)||directPrivateDetail;if(currentPrivate)pendingMemberTarget=currentHash||'#home';invalidateMemberAccess();if(currentPrivate){showMemberGate();error.memberOnly=true;}else renderCurrentPublicRoute();}throw error;}
+    return x;
+  }
+  async function logoutMember(button){
+    if(!memberAccess.member())return;
+    button.disabled=true;
+    try{const result=await api('/api/member-logout',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!result||result.member!==false)throw Error('회원 로그아웃을 확인하지 못했습니다.');pendingMemberTarget='';invalidateMemberAccess();renderPublicHome();}
+    catch(error){message(error.message||'회원 로그아웃을 하지 못했습니다.',true);}
+    finally{button.disabled=false;}
+  }
+  async function revalidateMemberSession(){
+    if(EDITOR||!memberAccess.member()||document.visibilityState==='hidden')return;
+    const read=++memberSessionRead,authEpoch=memberAuthEpoch;
+    try{
+      const session=await api('/api/member-session');
+      if(read!==memberSessionRead||authEpoch!==memberAuthEpoch||EDITOR||!memberAccess.member()||session?.member)return;
+      const target=location.hash||'#home',wasPrivate=activeMemberContent||memberOnlyHash(target);
+      if(wasPrivate)pendingMemberTarget=target;
+      invalidateMemberAccess();
+      if(wasPrivate)showMemberGate();else renderPublicHome();
+    }catch(error){/* A transient session check must not evict a member. */}
+  }
   async function getPeople(force=false){if(force||!people.length){const request=++peopleRead,next=(await api('/api/people')).people;if(!Array.isArray(next))throw Error('최신 명단을 확인하지 못했습니다. 다시 시도해주세요.');if(request===peopleRead){people=next;syncOperators(people);}return next;}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb'+(kind?'':' home-return')+'" href="'+(kind?'#'+kind:'#home')+'">'+(kind?'← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로'):'홈으로 가기')+'</a>';
-  async function home(){const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
+  async function home(){if(typeof activeMemberContent!=='undefined')activeMemberContent=false;const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);if(!memberAccess.allowed())return;try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
+    if(typeof activeMemberContent!=='undefined')activeMemberContent=kind==='schedule';
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
     if(EDITOR)$('newPost').onclick=()=>kind==='schedule'?openPicker(null):editNotice({id:crypto.randomUUID(),kind,version:0,title:'',body:''});
     let offset=0;
@@ -158,7 +257,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
   }
   async function detail(id,token){
     const request=++detailRead,current=()=>request===detailRead&&token===routeToken&&!draft;
-    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(!current())return;
+    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(!current())return;if(typeof activeMemberContent!=='undefined')activeMemberContent=d.kind==='schedule';
     let roster=[];
     if(d.kind==='schedule'){
       try{roster=await getPeople(true);}catch(e){}
@@ -438,6 +537,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     };render();renderMethods();dialog.showModal();
   }
   async function seeds(token){
+    if(typeof activeMemberContent!=='undefined')activeMemberContent=true;
     let type='member',editing=false;const checked=new Set();
     async function load(){await getPeople(true);const rd=await api('/api/rankings');if(token!==routeToken)return null;return rd;}
     let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;syncOperators(ranking);
@@ -530,11 +630,18 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView){
     paint();
   }
   async function route(){
-    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;stopPoll();app.innerHTML='<p class="empty">불러오는 중…</p>';
-    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
+    const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;if(typeof activeMemberContent!=='undefined')activeMemberContent=false;stopPoll();
+    if(['#schedule','#live','#seed'].includes(hash)&&typeof memberAccess!=='undefined'&&!memberAccess.allowed()){gateProtectedRoute(hash);return;}
+    app.innerHTML='<p class="empty">불러오는 중…</p>';
+    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(e.memberOnly)return;if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
-  window.addEventListener('hashchange',()=>{if(saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);});
+  function handleHashChange(){if(memberLoginPending||saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);}
+  window.addEventListener('hashchange',handleHashChange);
   document.addEventListener('click',e=>{const a=e.target.closest('a');if(a&&draft&&a.getAttribute('href')===(location.hash||'#home')){e.preventDefault();if(saving)return;if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?'))return;dirty=false;route();}});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='hidden')void revalidateMemberSession();});
+  window.addEventListener('focus',()=>{void revalidateMemberSession();});
+  window.addEventListener('pageshow',()=>{void revalidateMemberSession();});
+  setInterval(()=>{void revalidateMemberSession();},120000);
   window.addEventListener('beforeunload',e=>{if(dirty||saving){e.preventDefault();e.returnValue='';}});
   route();
 }

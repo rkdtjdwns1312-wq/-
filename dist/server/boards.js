@@ -12,6 +12,7 @@ import { createLiveView } from './live-client.js';
 import { liveCss } from './live-style.js';
 import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-write.js';
 import { substituteSchedule } from './schedule-substitution.js';
+import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-access.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -202,8 +203,8 @@ async function createBackup(env,kind){
   await env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(new Date(Date.now()-31*86400000).toISOString()).run();
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
-function page(editor,admin){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()});</script></body></html>`;
+function page(editor,admin,member){
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -211,10 +212,15 @@ export default {async fetch(request,env){
   const admin=Boolean(adminKey)&&path==='/administrate-'+adminKey?adminKey:'';
   const editor=admin?key||'':(Boolean(key)&&path==='/operate-'+key?key:'');
   if(path==='/api/operator-login')return operatorLogin(request,env);
-  if(path==='/api/live-courts')return liveCourts(request,env);
+  if(['/api/member-login','/api/member-logout','/api/member-session','/api/member-access/config'].includes(path))return memberAccessEndpoint(request,env);
+  // Protect live dispatch as well as the archived schedule/ranking API below.
+  if(path==='/api/live-courts')return await requireMember(request,env)||liveCourts(request,env);
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path.startsWith('/api/')){
+    const privateRead=request.method==='GET'&&(['/api/people','/api/rankings','/api/mvp','/api/schedule'].includes(path)||(path==='/api/posts'&&url.searchParams.get('kind')==='schedule'));
+    const memberAction=/^\/api\/posts\/[a-zA-Z0-9-]{1,80}\/(result|progress)$/.test(path);
+    if(privateRead||memberAction){const blocked=await requireMember(request,env);if(blocked)return blocked;}
     try{
       if(!env.DB)throw Error('Storage unavailable');
   if(path==='/api/people'&&request.method==='GET'){
@@ -468,6 +474,7 @@ export default {async fetch(request,env){
       const id=match[1];
       if(request.method==='GET'){
         const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
+        if(row?.kind==='schedule'){const blocked=await requireMember(request,env);if(blocked)return blocked;}
         return row?json({data:unpack(row)}):json({error:'게시글을 찾을 수 없습니다.'},404);
       }
       if(request.method==='DELETE'){
@@ -515,7 +522,7 @@ export default {async fetch(request,env){
     }catch(error){if(error?.conflict)return json({error:error.message,conflict:true},409);console.error('Board request failed',error);return json({error:'저장소에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
   }
   if(path!=='/'&&!editor&&!admin)return new Response('페이지를 찾을 수 없습니다.',{status:404});
-  return new Response(page(editor,admin),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer'}});
+  return new Response(page(editor,admin,Boolean(editor)||await hasMemberAccess(request,env)),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','vary':'Cookie'}});
 },async scheduled(event,env,ctx){
   // 요청 074: 주간 자동 백업(Cron). 1개월 지난 백업은 createBackup 안에서 삭제.
   try{if(env.DB)await createBackup(env,'auto');}catch(e){console.error('scheduled backup failed',e);}

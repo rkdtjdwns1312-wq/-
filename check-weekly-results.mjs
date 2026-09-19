@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
-import worker from './dist/server/index.js';
+import worker from './test-member-worker.mjs';
 
 export async function runWeeklyResultsChecks(){
   const sqlite=new DatabaseSync(':memory:');

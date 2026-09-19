@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
-import worker from './dist/server/index.js';
+import worker from './test-member-worker.mjs';
 import { createScheduleTools } from './dist/server/schedule-tools.js';
 
 export async function runMatchProgressChecks(){
