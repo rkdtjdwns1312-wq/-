@@ -13,6 +13,9 @@ import { liveCss } from './live-style.js';
 import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-write.js';
 import { substituteSchedule } from './schedule-substitution.js';
 import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-access.js';
+import { scoreHistory } from './score-history.js';
+import { createScoreHistory } from './score-history-client.js';
+import { scoreHistoryCss } from './score-history-style.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -193,18 +196,18 @@ async function unsettleSchedule(db,id,input={}){
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
   // One read transaction prevents a backup mixing pre-/post-settlement tables.
-  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes'];
-  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges});
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory});
   const id='bk-'+at.replace(/[:.]/g,'-')+'-'+Math.random().toString(36).slice(2,6);
   await env.DB.prepare('INSERT INTO backups (id,created_at,kind,data) VALUES (?,?,?,?)').bind(id,at,kind,data).run();
   await env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(new Date(Date.now()-31*86400000).toISOString()).run();
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin,member){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -218,6 +221,10 @@ export default {async fetch(request,env){
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path.startsWith('/api/')){
+    if(path==='/api/people/points-history'){
+      const blocked=await requireMember(request,env);if(blocked)return blocked;
+      try{return await scoreHistory(request,env);}catch{return json({error:'점수 기록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
+    }
     const privateRead=request.method==='GET'&&(['/api/people','/api/rankings','/api/mvp','/api/schedule'].includes(path)||(path==='/api/posts'&&url.searchParams.get('kind')==='schedule'));
     const memberAction=/^\/api\/posts\/[a-zA-Z0-9-]{1,80}\/(result|progress)$/.test(path);
     if(privateRead||memberAction){const blocked=await requireMember(request,env);if(blocked)return blocked;}

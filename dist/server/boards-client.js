@@ -12,7 +12,7 @@ export function createMemberAccess(EDITOR,initialMember=false){
 
 export function memberMenuLabel(member){return member?'회원 로그아웃':'회원권한';}
 
-export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false){
+export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory){
   const scheduleTools=createScheduleTools();
   const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed';
   const memberMenuLabel=member=>member?'회원 로그아웃':'회원권한';
@@ -134,8 +134,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     return parts.join('');
   }
   let people=[],peopleRead=0,draft=null,editRoster=people,dirty=false,routeToken=0,detailRead=0,saving=false,lastHash=location.hash||'#home',viewRound=1,pollTimer=null,recordingResult=false,ending=false,unsettling=false,addingCourt=false,emergencySubstituteOpening=false,pendingMemberTarget='',activeMemberContent=false,memberSessionRead=0,memberAuthEpoch=0,memberLoginPending=false,memberLoginPendingOwner=0;
-  let liveView=null;
-  const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();};
+  let liveView=null,historyView=null;
+  const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}liveView?.stop();historyView?.stop();};
   function renderPublicHome(){
     if(location.hash==='#home')route();else location.hash='#home';
   }
@@ -166,6 +166,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     if(!r.ok){const error=Error(x.error||'요청에 실패했습니다.');error.status=r.status;error.code=x&&x.code;if(error.code==='MEMBERS_ONLY'&&authEpoch===memberAuthEpoch){const ownsCurrentRoute=requestRoute===routeToken&&requestHash===location.hash,currentHash=ownsCurrentRoute?requestHash:location.hash,directPrivateDetail=ownsCurrentRoute&&requestHash.startsWith('#post/')&&/^\/api\/posts\/[a-zA-Z0-9-]{1,80}$/.test(target.pathname),currentPrivate=activeMemberContent||memberOnlyHash(currentHash)||directPrivateDetail;if(currentPrivate)pendingMemberTarget=currentHash||'#home';invalidateMemberAccess();if(currentPrivate){showMemberGate();error.memberOnly=true;}else renderCurrentPublicRoute();}throw error;}
     return x;
   }
+  if(typeof createScoreHistory==='function')historyView=createScoreHistory({dialog,api,esc,isAllowed:()=>memberAccess.allowed(),notify:message});
   async function logoutMember(button){
     if(!memberAccess.member())return;
     button.disabled=true;
@@ -555,12 +556,12 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';
         const opBtn=row=>ADMIN?'<button type="button" class="op-toggle'+(row.is_operator?' on':'')+'" data-mid="'+esc(row.member_id)+'" data-on="'+(row.is_operator?1:0)+'">'+(row.is_operator?'운영진 해제':'운영진 임명')+'</button>':'';
-        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td>'+nameHTML(row.name)+crown(row.name)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
+        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td><button type="button" class="score-history-open" data-score-history-type="member" data-score-history-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 점수 변화 보기">'+nameHTML(row.name)+'</button>'+crown(row.name)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>{const ap=Number(a.points)||0,bp=Number(b.points)||0;if(bp!==ap)return bp-ap;if(ap===20){const ag= a.floor_protected_at?1:0,bg=b.floor_protected_at?1:0;if(ag!==bg)return ag-bg;if(ag)return String(a.floor_protected_at).localeCompare(String(b.floor_protected_at));}return a.i-b.i;}).map((p,idx)=>({...p,rank:idx+1}));
         const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
-        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td>'+movement(p)+'</td><td>'+nameHTML(p.name)+manageButtons('guest',p.id,p.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td><span class="pts-cell">'+(typeof p.points==='number'?p.points:'-')+'</span>'+pointsMove(p)+'</td><td>'+(p.attendance??0)+'</td><td>'+(p.wins??0)+'</td><td>'+(p.losses??0)+'</td></tr>').join('');
+        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td>'+movement(p)+'</td><td><button type="button" class="score-history-open" data-score-history-type="guest" data-score-history-id="'+esc(p.id)+'" aria-label="'+esc(p.name)+' 점수 변화 보기">'+nameHTML(p.name)+'</button>'+manageButtons('guest',p.id,p.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td><span class="pts-cell">'+(typeof p.points==='number'?p.points:'-')+'</span>'+pointsMove(p)+'</td><td>'+(p.attendance??0)+'</td><td>'+(p.wins??0)+'</td><td>'+(p.losses??0)+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<p class="seed-note">게스트도 정모 출석 +1, 승 +1, 패 -1로 누적되며, 현재 정보는 DB에서 관리됩니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }
       chk();
@@ -569,6 +570,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       const adminPanel=ADMIN?'<div class="admin-panel"><div class="admin-head">홈페이지 관리자</div><p class="admin-note">아래 회원 표에서 <b>운영진 임명/해제</b>로 왕관을 달거나 뗄 수 있어요. 공지·대진·시드 백업은 매주 자동 저장되고 1개월간 보관됩니다.</p><div class="sticky-actions"><button id="backupNow" class="primary">지금 백업</button></div><div id="backupList" class="backup-list">불러오는 중…</div></div>':'';
       app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다<br><small>정모 승패 대상 회원만 순위 변동이 표시되고, 최저 20점은 보호될 수 있어요.</small></p>'+adminPanel+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
       $('seedMembers').onclick=()=>{type='member';checked.clear();render();};$('seedGuests').onclick=()=>{type='guest';checked.clear();render();};$('seedSearch').oninput=render;
+      $('seedList').addEventListener('click',e=>{const open=e.target.closest('.score-history-open');if(open)historyView?.open(open.dataset.scoreHistoryType,open.dataset.scoreHistoryId);});
       if(EDITOR)$('seedEdit').onclick=()=>{editing=!editing;checked.clear();paint();};
       if(ADMIN){$('backupNow').onclick=doBackup;$('backupList').addEventListener('click',e=>{const d=e.target.closest('.backup-dl');if(d)downloadBackup(d.dataset.id);});renderBackups();$('seedList').addEventListener('click',e=>{const t=e.target.closest('.op-toggle');if(t)toggleOperator(t.dataset.mid,t.dataset.on==='1'?0:1);});}
       if(editing){$('seedList').addEventListener('change',e=>{const c=e.target.closest('.seed-cb');if(!c)return;if(c.checked)checked.add(c.dataset.id);else checked.delete(c.dataset.id);chk();});$('seedList').addEventListener('click',e=>{const b=e.target.closest('.person-manage');if(!b)return;const source=(type==='member'?ranking:people).find(p=>(p.member_id||p.id)===b.dataset.personId)||{};const person={type:b.dataset.personType,id:b.dataset.personId,edit_version:Number(b.dataset.personVersion)||1,name:source.name||'',points:Number(source.points)||20};if(b.dataset.personAction==='edit')editPerson(person);else showHistory(person);});$('seedAdd').onclick=addPerson;$('seedDelete').onclick=deleteSelected;$('seedPromote').onclick=promoteSelected;}

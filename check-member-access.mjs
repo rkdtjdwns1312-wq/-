@@ -54,7 +54,7 @@ export async function runMemberAccessChecks(){
     assert.ok(!cookie.includes(password)&&!cookie.includes(env.EDITOR_KEY));
     for(const path of privatePaths)assert.equal((await call(path,'GET',undefined,member)).status,200,path);
     assert.deepEqual(await (await call('/api/member-session','GET',undefined,member)).json(),{member:true});
-    assert.ok((await (await call('/','GET',undefined,member)).text()).includes(',true);</script>'));
+    assert.ok((await (await call('/','GET',undefined,member)).text()).includes(',true,function createScoreHistory('));
     for(const path of ['/api/live-courts','/api/posts/member-private/result','/api/posts/member-private/progress']){
       assert.equal((await call(path,'POST',{},{...member,origin:'https://other.test'})).status,403,'cross-origin member write');
       assert.equal((await call(path,'POST',{},{...member,'content-type':'text/plain'})).status,415,'simple request content type');

@@ -20,6 +20,8 @@ import { runEmergencyUIChecks } from './check-emergency-ui.mjs';
 import { runOperatorNavChecks } from './check-operator-nav.mjs';
 import { runMemberAccessChecks } from './check-member-access.mjs';
 import { runMemberUIChecks } from './check-member-ui.mjs';
+import { runScoreHistoryChecks } from './check-score-history.mjs';
+import { runScoreHistoryUIChecks } from './check-score-history-ui.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -233,6 +235,7 @@ assert.equal(bkDl.status,200);const bkData=JSON.parse(await bkDl.text());assert.
 assert.ok(Array.isArray(bkData.settlements)&&bkData.settlements.some(row=>row.schedule_id==='guest-score'),'백업에 최신 정산 원본이 포함되어야 합니다');
 assert.ok(Array.isArray(bkData.rankingEvents)&&bkData.rankingEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 회원 정산 이벤트가 포함되어야 합니다');
 assert.ok(Array.isArray(bkData.guestEvents)&&bkData.guestEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 게스트 정산 이벤트가 포함되어야 합니다');
+assert.ok(Array.isArray(bkData.scoreHistory)&&bkData.scoreHistory.some(row=>row.kind==='change'),'백업에 영구 점수 이력도 포함되어야 합니다');
 await worker.scheduled({cron:'0 0 * * 0'},env,{waitUntil(){}});
 assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:{'x-kokkiri-admin':adminKey}}),env)).json()).items.length>=2);
 await runRankingProtectionChecks();
@@ -249,8 +252,19 @@ await runEmergencyUIChecks();
 await runOperatorNavChecks();
 await runMemberAccessChecks();
 await runMemberUIChecks();
+await runScoreHistoryChecks();
+await runScoreHistoryUIChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
+  if(process.env.KOKKIRI_HISTORY_FIXTURE==='1'){
+    // Opt-in browser QA only: this database is always in-memory, never production.
+    const at=new Date().toISOString(),id='history-preview';
+    db.prepare('INSERT INTO ranking_members(member_id,name,points,seed,rank,previous_rank,updated_at) VALUES(?,?,?,?,?,?,?)').run(id,'그래프 테스트',75,'C+',999,999,at);
+    db.prepare('DELETE FROM score_point_history WHERE person_id=?').run(id);
+    const insert=db.prepare('INSERT INTO score_point_history(person_type,person_id,recorded_at,points_before,points_after,kind) VALUES(?,?,?,?,?,?)');
+    let previous=45;
+    for(let week=150;week>=0;week--){const points=week===0?75:Math.round(60+15*Math.sin(week/4));insert.run('member',id,new Date(Date.now()-week*7*86400000).toISOString(),previous,points,'change');previous=points;}
+  }
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
   const previewPort=Number(process.env.KOKKIRI_PREVIEW_PORT||4173);
   assert.ok(Number.isInteger(previewPort)&&previewPort>=1024&&previewPort<=65535,'유효한 로컬 미리보기 포트가 필요합니다');
