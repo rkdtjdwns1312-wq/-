@@ -32,7 +32,7 @@ export async function runScoreHistoryUIChecks(){
   pages[0].points[0].before=null;
   let calls=0,allowed=true;const api=async()=>pages[calls++];const view=injectedFactory({dialog,api,esc,isAllowed:()=>allowed,notify:()=>{}});
   await view.open('member','member-1');assert.match(dialog.innerHTML,/최근 20주/);assert.doesNotMatch(dialog.innerHTML,/1년/);assert.match(dialog.innerHTML,/기록을 글로 보기/);assert.match(dialog.innerHTML,/변동 기준 없음/);assert.doesNotMatch(dialog.innerHTML,/변동 기준 없음점/);assert.match(dialog.innerHTML,/id="pickerTitle"/);
-  dialog.scroller.scrollLeft=420;const point={dataset:{scoreHistorySegment:'0',scoreHistoryPoint:'p-0'},closest:()=>point};dialog.root.listeners.click({target:point});await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,420,'점 선택 후에는 현재 가로 위치를 유지해야 합니다');
+  dialog.scroller.scrollLeft=420;dialog.querySelector('.score-history-details').open=true;const point={dataset:{scoreHistorySegment:'0',scoreHistoryPoint:'p-0'},closest:()=>point};dialog.root.listeners.click({target:point});await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,420,'점 선택 후에는 현재 가로 위치를 유지해야 합니다');assert.match(dialog.innerHTML,/<details class="score-history-details" open>/,'그래프 재배치 중 펼쳐 둔 텍스트 기록을 닫지 않습니다');
   dialog.root.querySelector('[data-score-history-older]').onclick?.();await Promise.resolve();await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,0,'처음 이전 20주 보기 뒤에는 새로 추가한 이전 구간을 바로 보여야 합니다');
   dialog.scroller.scrollLeft=0;dialog.scroller.fireScroll();await Promise.resolve();await Promise.resolve();assert.equal(dialog.scroller.scrollLeft,1000,'왼쪽 제스처로 추가할 때는 현재 가로 위치를 보존해야 합니다');
   for(let i=0;i<6;i++){dialog.scroller.scrollLeft=0;dialog.scroller.fireScroll();await Promise.resolve();await Promise.resolve();}
