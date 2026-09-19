@@ -264,6 +264,15 @@ if(process.argv.includes('--serve')){
     const insert=db.prepare('INSERT INTO score_point_history(person_type,person_id,recorded_at,points_before,points_after,kind) VALUES(?,?,?,?,?,?)');
     let previous=45;
     for(let week=150;week>=0;week--){const points=week===0?75:Math.round(60+15*Math.sin(week/4));insert.run('member',id,new Date(Date.now()-week*7*86400000).toISOString(),previous,points,'change');previous=points;}
+    // Short and boundary histories make the progressive weekly axis visible in browser QA.
+    const kstMidnight=Math.floor((Date.now()+9*3600000)/86400000)*86400000-9*3600000;
+    for(const weeks of [1,2,3,20,21]){
+      const fixtureId='history-weeks-'+weeks;
+      db.prepare('INSERT INTO ranking_members(member_id,name,points,seed,rank,previous_rank,updated_at) VALUES(?,?,?,?,?,?,?)').run(fixtureId,weeks+'주 테스트',75,'C+',1000+weeks,1000+weeks,at);
+      db.prepare('DELETE FROM score_point_history WHERE person_id=?').run(fixtureId);
+      insert.run('member',fixtureId,new Date(kstMidnight-(weeks-1)*7*86400000).toISOString(),null,60,'initial');
+      insert.run('member',fixtureId,at,60,75,'change');
+    }
   }
   env.OPERATOR_PASSWORD=process.env.OPERATOR_PASSWORD||'test-password';
   const previewPort=Number(process.env.KOKKIRI_PREVIEW_PORT||4173);
