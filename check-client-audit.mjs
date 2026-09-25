@@ -7,6 +7,7 @@ import { createScheduleTools } from './dist/server/schedule-tools.js';
 
 const source=await readFile(new URL('./dist/server/boards-client.js',import.meta.url),'utf8');
 const liveSource=await readFile(new URL('./dist/server/live-client.js',import.meta.url),'utf8');
+const styleSource=await readFile(new URL('./dist/server/boards-style.js',import.meta.url),'utf8');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
@@ -87,7 +88,7 @@ async function checkBoardListArrows(){
     const $=id=>elements.get(id)||null;
     return {app,$,api:async path=>({items,hasMore:false}),crumb:()=>'',elements};
   };
-  const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1}];
+  const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-unscored',title:'미반영 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'unscored'}];
   for(const kind of ['notice','schedule']){
     const h=makeHarness(items),board=compile('board',{app:h.app,crumb:h.crumb,EDITOR:'operator',$:h.$,api:h.api,esc,date:()=> '날짜',message(){},routeToken:1});
     await board(kind,1);
@@ -95,6 +96,7 @@ async function checkBoardListArrows(){
     assert.match(html,new RegExp('href="#post/'+encodeURIComponent('공지 1')+'"'),'board list must preserve encoded notice links');
     assert.match(html,/href="#post\/schedule-1"/,'board list must preserve schedule links');
     assert.doesNotMatch(html,/<span aria-hidden="true">→<\/span>/,kind+' list items must not render right arrows');
+    if(kind==='schedule')assert.match(html,/미반영마감/,'an unscored closed schedule must be labeled distinctly in the list');
   }
   assert.match(source,/home-return/,'board home link must use the home-return style');
   assert.match(source,/'홈으로 가기'/,'board home link must say 홈으로 가기');
@@ -326,8 +328,30 @@ async function checkSettlementVersions(){
     const calls=[],messages=[],refreshes=[];
     const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async()=>true,message:(text,error)=>messages.push({text,error}),api:async(path,options)=>{calls.push({path,body:JSON.parse(options.body)});return {data:{version:8}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async(...args)=>refreshes.push(args)});
     await endMatch(draft,1);
-    assert.deepEqual(calls,[{path:'/api/posts/settle-me/settle',body:{version:7,operation:'operation'}}],'settle must submit the version displayed to the operator, without a fresh GET');
+    assert.deepEqual(calls,[{path:'/api/posts/settle-me/settle',body:{version:7,operation:'operation',mode:'scored'}}],'a scored settlement must submit the displayed version and explicit mode without a fresh GET');
     assert.equal(refreshes.length,0);
+  }
+  {
+    const calls=[],messages=[];
+    const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async(message,options)=>{assert.equal(options.settlement,true);assert.equal(options.scoredAllowed,false);return 'unscored';},message:(text,error)=>messages.push({text,error}),api:async(path,options)=>{calls.push({path,body:JSON.parse(options.body)});return {data:{version:8,settlementMode:'unscored'}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
+    await endMatch(draft,1,false);
+    assert.deepEqual(calls,[{path:'/api/posts/settle-me/settle',body:{version:7,operation:'operation',mode:'unscored'}}],'an incomplete schedule may close only through an explicit unscored request');
+    assert.match(messages.at(-1).text,/시드현황·점수·출석·승패·MVP는 바뀌지 않습니다/,'unscored success must not claim that points changed');
+  }
+  {
+    const calls=[],messages=[];
+    const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async()=> 'scored',message:(text,error)=>messages.push({text,error}),api:async(...args)=>{calls.push(args);return {data:{version:8}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
+    await endMatch(draft,1,false);
+    assert.equal(calls.length,0,'a forged scored choice for incomplete results must not write');
+    assert.equal(messages.at(-1).error,true);
+  }
+  {
+    const messages=[],refreshes=[];
+    const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async()=> 'unscored',message:(text,error)=>messages.push({text,error}),api:async()=>({data:{version:8}}),EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async(...args)=>refreshes.push(args)});
+    await endMatch(draft,1,false);
+    assert.match(messages.at(-1).text,/다른 방식으로 이미 마감/,'a late competing response must not be reported as the chosen settlement');
+    assert.equal(messages.at(-1).error,true);
+    assert.equal(refreshes.length,1,'a competing settlement response must refresh the locked detail');
   }
   {
     const refreshes=[];
@@ -344,6 +368,12 @@ async function checkSettlementVersions(){
     assert.deepEqual(calls[0],{path:'/api/posts/settle-me/unsettle',body:{version:7}});
     request.resolve({data:{version:8}});await first;await second;
   }
+  {
+    const messages=[];
+    const unsettlePost=compile('unsettlePost',{saving:false,unsettling:false,currentDetail:()=>true,confirmDialog:async text=>{assert.match(text,/점수는 바뀌지 않고/);return true;},message:(text,error)=>messages.push({text,error}),api:async()=>({data:{version:8}}),EDITOR:'operator',routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
+    await unsettlePost({...draft,settlementMode:'unscored'},1);
+    assert.match(messages.at(-1).text,/점수는 바뀌지 않았고/,'reopening an unscored closure must say that points were unchanged');
+  }
 }
 
 async function checkConfirmationLifecycle(){
@@ -352,6 +382,24 @@ async function checkConfirmationLifecycle(){
   const no=confirmDialog('확인');h.$('confirmNo').onclick();assert.equal(await no,false,'No must resolve false');
   const yes=confirmDialog('확인');h.$('confirmYes').onclick();assert.equal(await yes,true,'Yes must resolve true before its close event');
   const escaped=confirmDialog('확인');h.dialog.dispatch('cancel');assert.equal(await escaped,false,'Escape must resolve false and close safely');
+
+  const incomplete=confirmDialog('대진 마감',{settlement:true,scoredAllowed:false});
+  assert.match(h.dialog.innerHTML,/id="confirmNo"[^>]*>아니오[\s\S]*id="confirmYes"[^>]*>예[\s\S]*id="confirmUnscored"[^>]*>미반영마감/,'settlement confirmation must present No, Yes, then unscored close');
+  assert.equal(h.$('confirmYes').disabled,true,'Yes must be disabled while results are incomplete');
+  h.$('confirmYes').onclick();h.$('confirmUnscored').onclick();assert.equal(await incomplete,'unscored','an incomplete settlement can choose only unscored close');
+  const complete=confirmDialog('대진 마감',{settlement:true,scoredAllowed:true});
+  assert.equal(h.$('confirmYes').disabled,false,'Yes must remain available when all results are complete');
+  h.$('confirmYes').onclick();assert.equal(await complete,'scored','the normal settlement choice keeps an explicit scored mode');
+
+  {
+    const calls=[];
+    const scope={saving:false,ending:false,currentDetail:()=>true,message(){},api:async(...args)=>{calls.push(args);return {data:{version:8}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{},$:h.$,dialog:h.dialog,esc};
+    const endMatch=new Function(...Object.keys(scope),actual('confirmDialog')+actual('endMatch')+';return endMatch;')(...Object.values(scope));
+    const no=endMatch({id:'settle-me',version:7},1,false);h.$('confirmNo').onclick();await no;
+    const canceled=endMatch({id:'settle-me',version:7},1,false);h.dialog.dispatch('cancel');await canceled;
+    const closed=endMatch({id:'settle-me',version:7},1,false);h.dialog.close();await closed;
+    assert.equal(calls.length,0,'No, Escape, and dialog close must not write a settlement');
+  }
 
   const calls=[];
   const unsettlePost=compile('unsettlePost',{saving:false,unsettling:false,currentDetail:()=>true,confirmDialog,message(){},api:async(path,options)=>{calls.push({path,body:JSON.parse(options.body)});return {data:{version:8}};},EDITOR:'operator',routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
@@ -408,7 +456,10 @@ export async function runClientAuditChecks(){
   await checkSettlementVersions();
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();
-  console.log('PASS: actual client factories cover notice navigation, confirmation lifecycle, canceled login, local picker state, settlement versions, and people dialogs.');
+  assert.match(source,/미반영마감 · 시드 미반영/,'an unscored locked detail must display the seed-preservation badge');
+  assert.match(styleSource,/\.confirm-actions\{[^}]*flex-wrap:wrap/,'three confirmation choices must wrap on narrow screens');
+  assert.match(source,/if\(\$\('endMatch'\)\)\$\('endMatch'\)\.onclick=\(\)=>endMatch\(d,token,allScoredDone\)/,'every open schedule must route its close button through the result-completeness guard');
+  console.log('PASS: actual client factories cover notice navigation, confirmation lifecycle, canceled login, local picker state, scored/unscored settlement modes, and people dialogs.');
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){await runClientAuditChecks();await runProgressUIChecks();await runLiveUIChecks();}
