@@ -21,7 +21,7 @@ export async function readWeeklyResults(db){
   for(const e of results){if(e.kind==='member')members.set(e.person_id,e);else if(e.kind==='guest')guests.set(e.person_id,e);}
   const pointEdits=new Set();
   if(results[0]?.settled_at){
-    const edits=await db.prepare("SELECT DISTINCT person_type,person_id FROM people_changes WHERE action='update' AND before_points<>after_points AND created_at>=?").bind(results[0].settled_at).all();
+    const edits=await db.prepare("SELECT DISTINCT person_type,person_id FROM people_changes WHERE action='update' AND id NOT LIKE 'attendance-fix-%' AND before_points<>after_points AND created_at>=?").bind(results[0].settled_at).all();
     for(const edit of edits.results)pointEdits.add(edit.person_type+':'+edit.person_id);
   }
   function display(row,event,pointEdited){

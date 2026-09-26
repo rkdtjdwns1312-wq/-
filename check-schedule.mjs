@@ -285,14 +285,15 @@ export async function runScheduleChecks({worker,env,origin}){
   const reloaded=(await (await call('/api/posts/schedule-ui-test')).json()).data;
   assert.deepEqual(reloaded.schedule[0].g[1],other);assert.equal(reloaded.schedule[0].g[0][0],other[0]);
   // All-round late participants receive neither attendance nor match points.
-  const names=roster.slice(0,5).map(p=>p.name),alwaysLate=names[0];
-  const noArrival={kind:'schedule',title:'늦참 출석 검사',names,participantIds:roster.slice(0,5).map(p=>p.id),courts:1,rounds:1,lateRounds:{[alwaysLate]:1},schedule:[{g:[names.slice(1)],method:'same'}],results:{'0-0':'a'}};
+  const attendanceRoster=(await (await call('/api/rankings')).json()).items.slice(0,16);
+  const names=attendanceRoster.map(p=>p.name),alwaysLate=names[0];
+  const noArrival={kind:'schedule',title:'늦참 출석 검사',names,participantIds:attendanceRoster.map(p=>p.member_id),courts:1,rounds:1,lateRounds:{[alwaysLate]:1},schedule:[{g:[names.slice(1,5)],method:'same'}],results:{'0-0':'a'}};
   assert.equal((await call('/api/posts/late-attendance-test','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:noArrival})).status,200);
   assert.equal((await call('/api/posts/late-attendance-test/settle','POST',{version:1,operation:crypto.randomUUID()})).status,200);
   const scored=(await (await call('/api/rankings')).json()).items;
   assert.equal(scored.find(p=>p.name===alwaysLate).attendance,0);
   assert.equal(scored.find(p=>p.name===names[1]).attendance,1);
-  const noGames={...noArrival,rounds:2,names:names.slice(0,4),participantIds:roster.slice(0,4).map(p=>p.id),lateRounds:Object.fromEntries(names.slice(0,4).map(n=>[n,1])),schedule:[{g:[],method:'same'},{g:[names.slice(0,4)],method:'balanced'}],results:{}};
+  const noGames={...noArrival,rounds:2,names:names.slice(0,4),participantIds:attendanceRoster.slice(0,4).map(p=>p.member_id),lateRounds:Object.fromEntries(names.slice(0,4).map(n=>[n,1])),schedule:[{g:[],method:'same'},{g:[names.slice(0,4)],method:'balanced'}],results:{}};
   assert.equal((await call('/api/posts/late-empty-test','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:noGames})).status,200);
   console.log('PASS: same rotation, adjacent max-two score boxes/local repair, score-gap boundaries, late/rest rules, edits and saved schedule preservation.');
 }

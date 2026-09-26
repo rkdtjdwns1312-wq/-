@@ -17,12 +17,16 @@ function harness(){
   const data=async(...args)=>{const r=await call(...args),body=await r.json();assert.equal(r.status,200,JSON.stringify(body));return body;};
   const players=sqlite.prepare('SELECT member_id AS id,name FROM ranking_members ORDER BY rank LIMIT 3').all();
   players.push(sqlite.prepare('SELECT guest_id AS id,name FROM guests WHERE hidden=0 LIMIT 1').get());
-  const payload=complete=>({title:'미반영 로컬 검사',names:players.map(p=>p.name),participantIds:players.map(p=>p.id),courts:1,rounds:2,schedule:[1,2].map(round=>({round,method:'same',g:[players.map(p=>p.name)]})),results:complete?{'0-0':'a','1-0':'a'}:{'0-0':'a'}});
+  const resting=sqlite.prepare('SELECT member_id AS id,name FROM ranking_members ORDER BY rank LIMIT 12 OFFSET 3').all();
+  const roster=[...players,...resting];
+  const payload=complete=>({title:'미반영 로컬 검사',names:roster.map(p=>p.name),participantIds:roster.map(p=>p.id),courts:1,rounds:2,schedule:[1,2].map(round=>({round,method:'same',g:[players.map(p=>p.name)]})),results:complete?{'0-0':'a','1-0':'a'}:{'0-0':'a'}});
   const create=async(id,complete=true)=>(await data('/api/posts/'+id,'PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:payload(complete)})).data;
   const get=async id=>(await data('/api/posts/'+id)).data;
   const close=(id,mode,version=1,operation=crypto.randomUUID())=>call('/api/posts/'+id+'/settle','POST',{version,operation,...(mode===undefined?{}:{mode})});
   const scoringSnapshot=()=>JSON.stringify(['ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','roster_write_revision'].map(t=>sqlite.prepare('SELECT * FROM '+t).all()));
-  const display=async()=>({rankings:await data('/api/rankings'),people:await data('/api/people'),mvp:await data('/api/mvp'),graph:(await data('/api/people/points-history?type=member&id='+players[0].id)).points});
+  // SQLite and JS clocks can differ by a few milliseconds on Windows. Supply
+  // an accepted explicit bound so a just-written closure is always in view.
+  const display=async()=>({rankings:await data('/api/rankings'),people:await data('/api/people'),mvp:await data('/api/mvp'),graph:(await data('/api/people/points-history?type=member&id='+players[0].id+'&before='+encodeURIComponent(new Date(Date.now()+500).toISOString()))).points});
   return {sqlite,call,data,players,payload,create,get,close,scoringSnapshot,display,set beforeWrite(fn){beforeWrite=fn;},set beforeBatch(fn){beforeBatch=fn;}};
 }
 
@@ -32,6 +36,8 @@ export async function runUnscoredSettlementChecks(){
     await h.create('prior');assert.equal((await h.close('prior')).status,200,'legacy omitted mode still scores');
     const before=h.scoringSnapshot(),display=await h.display();
     assert.equal(display.rankings.displaySettlementId,'prior');
+    assert.equal(display.rankings.items.find(p=>p.member_id===h.players[0].id).attendance,1);
+    assert.equal(display.graph.length,1,'the preserved graph snapshot must include the scored closure');
     assert.ok(display.rankings.items.some(p=>p.wins===2));assert.ok(display.people.people.some(p=>p.type==='guest'&&p.losses===2));
     const draft=await h.create('unscored',false),operation=crypto.randomUUID();
     assert.equal((await h.close('unscored','scored')).status,400,'regular closure still needs all results');

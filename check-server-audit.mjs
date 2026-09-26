@@ -18,7 +18,7 @@ function harness(){
   async function data(path,method,body){const r=await call(path,method,body),j=await r.json();assert.equal(r.status,200,JSON.stringify(j));return j.data||j;}
   const people=()=>sqlite.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank').all();
   const person=()=>people()[0];
-  const payload=()=>{const p=people().slice(0,4),names=p.map(x=>x.name);return {title:'감사 시험',names,participantIds:p.map(x=>x.member_id),courts:1,rounds:1,schedule:[{method:'same',g:[names]}],results:{'0-0':'a'}};};
+  const payload=()=>{const p=people().slice(0,16),names=p.map(x=>x.name);return {title:'감사 시험',names,participantIds:p.map(x=>x.member_id),courts:1,rounds:1,schedule:[{method:'same',g:[names.slice(0,4)]}],results:{'0-0':'a'}};};
   const create=id=>data('/api/posts/'+id,'PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:payload()});
   const settle=id=>data('/api/posts/'+id).then(p=>call('/api/posts/'+id+'/settle','POST',{version:p.version,operation:crypto.randomUUID()}));
   return {sqlite,DB,env,call,data,people,person,payload,create,settle,get queryCount(){return queryCount;},resetCount(){queryCount=0;},set beforeBatch(fn){beforeBatch=fn;},set beforeRun(fn){beforeRun=fn;}};
@@ -83,7 +83,7 @@ export async function runServerAuditChecks(){
   }
   {
     const h=harness();try{
-      const guest=await h.data('/api/people','POST',{name:'이관 전 닉네임',type:'guest',points:50}),p=h.payload();p.names[0]=guest.name;p.participantIds[0]=guest.id;p.schedule[0].g[0]=[...p.names];
+      const guest=await h.data('/api/people','POST',{name:'이관 전 닉네임',type:'guest',points:50}),p=h.payload();p.names[0]=guest.name;p.participantIds[0]=guest.id;p.schedule[0].g[0]=p.names.slice(0,4);
       await h.data('/api/posts/promoted-name','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:p});
       await h.data('/api/people/promote','POST',{ids:[guest.id]});
       let promoted=h.people().find(x=>x.promoted_guest_id===guest.id);

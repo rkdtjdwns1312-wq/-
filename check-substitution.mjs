@@ -16,8 +16,10 @@ export async function runSubstitutionChecks(){
   const save=(id,p)=>data('/api/posts/'+id,'PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:p});
   const snapshot=()=>JSON.stringify(['ranking_members','guests','ranking_events','guest_events','ranking_settlements'].map(t=>sqlite.prepare('SELECT * FROM '+t).all()));
   try{
-    const people=sqlite.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank').all().slice(0,10),guest=sqlite.prepare('SELECT * FROM guests WHERE hidden=0 ORDER BY points DESC').get();
-    const names=people.slice(0,8).map(p=>p.name),ids=people.slice(0,8).map(p=>p.member_id);
+    const people=sqlite.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank').all().slice(0,18),guest=sqlite.prepare('SELECT * FROM guests WHERE hidden=0 ORDER BY points DESC').get();
+    // Keep members 8/9 outside the roster so replacement still adds new attendees.
+    const participants=[...people.slice(0,8),...people.slice(10,18)];
+    const names=participants.map(p=>p.name),ids=participants.map(p=>p.member_id);
     const payload={title:'긴급교체 검사',names,participantIds:ids,courts:2,rounds:2,schedule:[{method:'same',g:[names.slice(0,4),names.slice(4,8)]},{method:'random',g:[names.slice(0,4),names.slice(4,8)]}],results:{'0-0':'a','0-1':'b'}};
     const id='sub-test',path='/api/posts/'+id+'/substitute';let post=await save(id,payload);
     await data('/api/posts/'+id+'/progress','POST',{key:'1-1',state:'playing',version:post.version});post=await get(id);
@@ -64,7 +66,7 @@ export async function runSubstitutionChecks(){
     let legacy=await save('sub-legacy',{...payload,names:[...names,'임시 참가'],participantIds:[]});
     legacy=await data('/api/posts/sub-legacy/substitute','POST',{version:legacy.version,round:1,court:1,oldName:names[0],newName:people[8].name});
     assert.equal(legacy.participantIds[legacy.names.indexOf(people[8].name)],people[8].member_id);
-    assert.equal(legacy.participantIds[1],ids[1]);assert.match(legacy.participantIds[8],/^adhoc-/);
+    assert.equal(legacy.participantIds[1],ids[1]);assert.match(legacy.participantIds[names.length],/^adhoc-/);
     let guarded=await save('sub-guard',{...payload,absent:[names[4]],lateRounds:{[names[5]]:1},schedule:[{method:'same',g:[names.slice(0,4)]},payload.schedule[1]],results:{'0-0':'a'}});
     for(const newName of [names[4],names[5]])assert.equal((await call('/api/posts/sub-guard/substitute','POST',{version:guarded.version,round:1,court:1,oldName:names[0],newName})).status,400,'absent/late status is not silently changed');
     sqlite.prepare('UPDATE guests SET name=? WHERE guest_id=?').run(people[8].name,guest.guest_id);

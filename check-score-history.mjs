@@ -93,34 +93,38 @@ export async function runScoreHistoryChecks(){
     const starting=await data(path('history-member','member',new Date(Date.parse(boundary)+SCORE_WINDOW_MS).toISOString()));assert.ok(starting.points.some(p=>p.at===boundary),'half-open ranges include each boundary record once');
     // Full real workflow: only closure generates a graph point; cancellation removes
     // that point but never erases the independent audit ledger.
+    // Include just-written closures despite SQLite/JS clock granularity on Windows;
+    // the earlier default-clock and explicit boundary tests remain unchanged.
+    const freshPath=(id,type='member')=>path(id,type,new Date(Date.now()+500).toISOString());
     const add=async(name,type,points)=>(await data('/api/people','POST',{name,type,points})).data;
     const a=await add('점수검사 A','member',50),b=await add('점수검사 B','guest',40),c=await add('점수검사 C','member',50),d=await add('점수검사 D','member',40);
     const names=[a.name,b.name,c.name,d.name],id='history-settlement';
-    await data('/api/posts/'+id,'PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:{title:'점수 이력 검사',names,participantIds:[a.id,b.id,c.id,d.id],courts:1,rounds:1,schedule:[{round:1,method:'same',g:[names]}],results:{'0-0':'a'}}});
+    const resting=[];for(let i=0;i<12;i++)resting.push(await add('점수검사 휴식 '+i,'member',60));
+    await data('/api/posts/'+id,'PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:{title:'점수 이력 검사',names:[...names,...resting.map(p=>p.name)],participantIds:[a.id,b.id,c.id,d.id,...resting.map(p=>p.id)],courts:1,rounds:1,schedule:[{round:1,method:'same',g:[names]}],results:{'0-0':'a'}}});
     const post=(await data('/api/posts/'+id)).data;
-    assert.deepEqual((await data(path(a.id))).points,[],'saving a draft/results is not a closure point');
+    assert.deepEqual((await data(freshPath(a.id))).points,[],'saving a draft/results is not a closure point');
     const operation=crypto.randomUUID();
     const settled=(await data('/api/posts/'+id+'/settle','POST',{version:post.version,operation})).data;
-    assert.equal((await data(path(a.id))).person.points,52);
-    const aGraph=await data(path(a.id));assert.equal(aGraph.points.length,1);assert.equal(aGraph.points[0].at,settled.settledAt);assert.equal(aGraph.recordedFrom,settled.settledAt);
+    assert.equal((await data(freshPath(a.id))).person.points,52);
+    const aGraph=await data(freshPath(a.id));assert.equal(aGraph.points.length,1);assert.equal(aGraph.points[0].at,settled.settledAt);assert.equal(aGraph.recordedFrom,settled.settledAt);
     await data('/api/posts/'+id+'/settle','POST',{version:post.version,operation});
-    assert.deepEqual((await data(path(a.id))).points,aGraph.points,'idempotent retry does not add points');
-    const loserGraph=await data(path(c.id));assert.equal(loserGraph.points.length,1);assert.equal(loserGraph.points[0].before,50);assert.equal(loserGraph.points[0].points,50,'zero net change still records participating member closure');
+    assert.deepEqual((await data(freshPath(a.id))).points,aGraph.points,'idempotent retry does not add points');
+    const loserGraph=await data(freshPath(c.id));assert.equal(loserGraph.points.length,1);assert.equal(loserGraph.points[0].before,50);assert.equal(loserGraph.points[0].points,50,'zero net change still records participating member closure');
     assert.deepEqual((await data(path('history-current'))).points,[],'nonparticipant gets no dot');
-    assert.ok((await data(path(b.id,'guest'))).points.some(p=>p.before===40&&p.points===42));
+    assert.ok((await data(freshPath(b.id,'guest'))).points.some(p=>p.before===40&&p.points===42));
     await data('/api/people/promote','POST',{ids:[b.id]});
     const promoted=(await data('/api/people')).people.find(p=>p.name===b.name&&p.type==='member');assert.ok(promoted);
-    const promotedHistory=await data(path(promoted.id));assert.ok(promotedHistory.points.some(p=>p.before===40&&p.points===42));
+    const promotedHistory=await data(freshPath(promoted.id));assert.ok(promotedHistory.points.some(p=>p.before===40&&p.points===42));
     await data('/api/posts/'+id+'/unsettle','POST',{});
     assert.equal(sqlite.prepare('SELECT count(*) AS n FROM ranking_events WHERE schedule_id=?').get(id).n,0);
-    const undone=await data(path(a.id));assert.equal(undone.person.points,50);assert.deepEqual(undone.points,[]);assert.equal(undone.recordedFrom,null);
-    const promotedUndo=await data(path(promoted.id));assert.equal(promotedUndo.person.points,40);assert.deepEqual(promotedUndo.points,[]);
+    const undone=await data(freshPath(a.id));assert.equal(undone.person.points,50);assert.deepEqual(undone.points,[]);assert.equal(undone.recordedFrom,null);
+    const promotedUndo=await data(freshPath(promoted.id));assert.equal(promotedUndo.person.points,40);assert.deepEqual(promotedUndo.points,[]);
     const audit=sqlite.prepare('SELECT points_before AS before,points_after AS after FROM score_point_history WHERE person_id=?').all(a.id);
     assert.ok(audit.some(p=>p.before===50&&p.after===52));assert.ok(audit.some(p=>p.before===52&&p.after===50),'cancelled settlement audit is retained');
     const undonePost=(await data('/api/posts/'+id)).data;
     const resettled=(await data('/api/posts/'+id+'/settle','POST',{version:undonePost.version,operation:crypto.randomUUID()})).data;
-    const reGraph=await data(path(a.id));assert.equal(reGraph.points.length,1);assert.equal(reGraph.points[0].at,resettled.settledAt);assert.notEqual(resettled.settledAt,settled.settledAt);
-    assert.equal((await data(path(promoted.id))).points.length,1,'promoted identity has one current settlement point');
+    const reGraph=await data(freshPath(a.id));assert.equal(reGraph.points.length,1);assert.equal(reGraph.points[0].at,resettled.settledAt);assert.notEqual(resettled.settledAt,settled.settledAt);
+    assert.equal((await data(freshPath(promoted.id))).points.length,1,'promoted identity has one current settlement point');
     // Two closures on one calendar day are distinct; an event without a closure is excluded.
     const sameDay=new Date(Date.parse(closedAt)+1000).toISOString();
     event.run('same-day','history-member',62,64,'C','C',sameDay);closeAt('same-day',sameDay);

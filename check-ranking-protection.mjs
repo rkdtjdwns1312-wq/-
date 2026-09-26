@@ -65,6 +65,7 @@ export async function runRankingProtectionChecks(){
     const idle=await add('회귀 미참가','member',31),peer=await add('회귀 20유지','member',20);
     const topGuest=await add('회귀 이관상위','guest',500);
     const participants=[up,high,down,floor,equal,guest,random,absent];
+    for(let i=0;i<8;i++)participants.push(await add('회귀 휴식 '+i,'member',60));
     const matches=[[up.name,high.name,down.name,floor.name],[up.name,high.name,equal.name,guest.name]];
     const schedule={title:'순위·보호 회귀',names:participants.map(p=>p.name),participantIds:participants.map(p=>p.id),courts:2,rounds:3,absent:[absent.name],
       schedule:[{round:1,method:'balanced',g:[...matches,[up.name,high.name,down.name,absent.name]]},{round:2,method:'same',g:matches},{round:3,method:'random',g:[[up.name,down.name,high.name,random.name]]}],

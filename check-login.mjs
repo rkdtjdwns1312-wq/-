@@ -23,6 +23,8 @@ import { runMemberUIChecks } from './check-member-ui.mjs';
 import { runScoreHistoryChecks } from './check-score-history.mjs';
 import { runScoreHistoryUIChecks } from './check-score-history-ui.mjs';
 import { runUnscoredSettlementChecks } from './check-unscored-settlement.mjs';
+import { runAttendancePolicyChecks } from './check-attendance-policy.mjs';
+import { runAttendanceCorrectionChecks } from './check-attendance-correction.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -89,6 +91,14 @@ assert.ok(rkB.items.map(r=>r.rank).every((v,i)=>v===i+1),'삭제 후에도 회�
 const ppB=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people;assert.equal(ppB.filter(p=>p.type==='guest').length,35);assert.equal(ppB.filter(p=>p.type==='member').length,61);
 assert.equal((await worker.fetch(new Request(origin+'/api/people/hide',{method:'POST'}),env)).status,403);
 const schedule={id:'ranking-test',kind:'schedule',version:0,title:'점수 계산 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
+// Attendance uses the configured roster count; absent extras do not change
+// the original four/eight-player point, event-count or ranking assertions.
+function attendanceFixture(post){
+  const extra=ppB.filter(p=>p.type==='member'&&!post.names.includes(p.name)).slice(0,16-post.names.length);
+  post.names.push(...extra.map(p=>p.name));post.participantIds.push(...extra.map(p=>p.id));
+  post.absent=[...(post.absent||[]),...extra.map(p=>p.name)];
+}
+attendanceFixture(schedule);
 const put=(version,data)=>worker.fetch(new Request(origin+'/api/posts/ranking-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
 assert.equal((await put(0,schedule)).status,200);schedule.version=1;schedule.results={'0-0':'a'};const saved=await put(1,schedule);assert.equal(saved.status,200);const savedData=(await saved.json()).data;const settled=await worker.fetch(new Request(origin+'/api/posts/ranking-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:savedData.version,operation:'settle-test'})}),env);assert.equal(settled.status,200);const settledData=(await settled.json()).data;assert.equal(settledData.settledAt!==undefined,true);const afterRankings=await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json();const after=afterRankings.items;assert.equal(afterRankings.updatedDate,new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}));assert.equal(after.find(row=>row.name==='시오').points,101);assert.equal(after.find(row=>row.name==='구구').points,90);assert.equal(after.find(row=>row.name==='구름').points,89);assert.equal(after.find(row=>row.name==='백구').points,88);assert.equal(after.find(row=>row.name==='시오').previous_points,99);assert.equal(after.find(row=>row.name==='시오').points-after.find(row=>row.name==='시오').previous_points,2);assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ranking_events').get().count,4);assert.equal((await worker.fetch(new Request(origin+'/api/posts/ranking-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:settledData.version,operation:'settle-again'})}),env)).status,200);
 assert.equal((await put(settledData.version,{...schedule,version:settledData.version,settledAt:settledData.settledAt})).status,409);
@@ -103,6 +113,7 @@ assert.equal((await worker.fetch(new Request(origin+'/api/posts/legacy-schedule'
 assert.ok(!((await (await worker.fetch(new Request(origin+'/api/posts?kind=schedule'),env)).json()).items.some(p=>p.id==='legacy-schedule')));
 // 요청 037·038·039: 라운드 방식 저장, 회원(공개) 결과 기록, 랜덤 라운드 제외 정산, MVP
 const wave2={id:'wave2-test',kind:'schedule',version:0,title:'웨이브2 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:2,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구']],rest:[]},{round:2,method:'random',g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
+attendanceFixture(wave2);
 const putW2=(version,data)=>worker.fetch(new Request(origin+'/api/posts/wave2-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
 const postResult=body=>worker.fetch(new Request(origin+'/api/posts/wave2-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),env);
 const getW2=async()=>(await (await worker.fetch(new Request(origin+'/api/posts/wave2-test'),env)).json()).data;
@@ -150,6 +161,7 @@ assert.equal((await worker.fetch(new Request(origin+'/api/operator-login',{metho
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-login',{method:'POST',headers:{origin},body:'{}'}),{})).status,503);
 // 요청 053: 마감 취소(unsettle) — 최근 마감 대진의 정산을 되돌려 점수·출석·승패 원복, settledAt 해제
 const uSched={id:'unsettle-test',kind:'schedule',version:0,title:'마감취소 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
+attendanceFixture(uSched);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/unsettle-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:0,operation:crypto.randomUUID(),data:uSched})}),env)).status,200);
 const uPre=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='시오').points;
 await worker.fetch(new Request(origin+'/api/posts/unsettle-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'0-0',winner:'a'})}),env);
@@ -163,6 +175,7 @@ assert.equal((await (await worker.fetch(new Request(origin+'/api/posts/unsettle-
 // 요청 062: 코트 추가(라운드 내 경기 수 가변·중복 배치) — 시오·구구·구름·백구가 한 라운드에 두 경기
 const putV=(id,v,d)=>worker.fetch(new Request(origin+'/api/posts/'+id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:v,operation:crypto.randomUUID(),data:d})}),env);
 const vt={id:'court-test',kind:'schedule',version:0,title:'코트추가 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:1,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구'],['시오','구름','구구','백구']],rest:[]}],results:{'0-0':'a','0-1':'a'}};
+attendanceFixture(vt);
 assert.equal((await putV('court-test',0,vt)).status,200);
 const cB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,cbp=n=>cB.find(r=>r.name===n).points;const cb={s:cbp('시오'),g:cbp('구구'),r:cbp('구름'),b:cbp('백구')};
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/court-test/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:1,operation:'settle-court'})}),env)).status,200);
@@ -170,6 +183,7 @@ const cA=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).js
 assert.equal(cap2('시오')-cb.s,3);assert.equal(cap2('구구')-cb.g,1);assert.equal(cap2('구름')-cb.r,1);assert.equal(cap2('백구')-cb.b,-1);
 // 요청 061: 불참(무효 경기) — 백구 불참 → 백구 낀 경기 무효, 백구 출석 0, 시오는 출석만
 const ab={id:'absent-test',kind:'schedule',version:0,title:'불참 테스트',names:['호잇','뚜기','주밤','로토','시오','구구','구름','백구'],participantIds:['member-4','member-5','member-6','member-7','member-10','member-17','member-16','member-18'],courts:2,rounds:1,schedule:[{round:1,method:'balanced',g:[['호잇','뚜기','주밤','로토'],['시오','구구','구름','백구']],rest:[]}],results:{'0-0':'a','0-1':'a'},absent:['백구']};
+attendanceFixture(ab);
 assert.equal((await putV('absent-test',0,ab)).status,200);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/absent-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'0-1',winner:'a'})}),env)).status,400);
 const aB=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items,abp=n=>aB.find(r=>r.name===n).points;const abv={h:abp('호잇'),t:abp('뚜기'),j:abp('주밤'),l:abp('로토'),s:abp('시오'),b:abp('백구')};
@@ -193,6 +207,7 @@ assert.equal(gsAdd.status,200);const gsId=(await gsAdd.json()).data.id;
 const gsPre=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people.find(p=>p.id===gsId);
 assert.equal(gsPre.points,30);assert.equal(gsPre.previous_points,30);assert.equal(gsPre.attendance,0);
 const gsSched={id:'guest-score',kind:'schedule',version:0,title:'게스트 점수',names:['점수게스트','시오','구구','구름'],participantIds:[gsId,'member-10','member-17','member-16'],courts:1,rounds:1,schedule:[{round:1,method:'balanced',g:[['점수게스트','시오','구구','구름']],rest:[]}],results:{}};
+attendanceFixture(gsSched);
 assert.equal((await putV('guest-score',0,gsSched)).status,200);
 await worker.fetch(new Request(origin+'/api/posts/guest-score/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:'0-0',winner:'a'})}),env);
 const gsVer=(await (await worker.fetch(new Request(origin+'/api/posts/guest-score'),env)).json()).data.version;
@@ -256,6 +271,8 @@ await runMemberUIChecks();
 await runScoreHistoryChecks();
 await runScoreHistoryUIChecks();
 await runUnscoredSettlementChecks();
+await runAttendancePolicyChecks();
+await runAttendanceCorrectionChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   if(process.env.KOKKIRI_HISTORY_FIXTURE==='1'){

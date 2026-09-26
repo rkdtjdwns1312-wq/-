@@ -16,6 +16,8 @@ import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-acc
 import { scoreHistory } from './score-history.js';
 import { createScoreHistory } from './score-history-client.js';
 import { scoreHistoryCss } from './score-history-style.js';
+import { attendanceCorrection } from './attendance-correction.js';
+import { attendancePolicy } from './attendance-policy.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -116,7 +118,7 @@ async function settleSchedule(db,id,input){
   const resolve=(name,index)=>{const pid=Array.isArray(post.participantIds)?post.participantIds[index]:'';if(byId.has(pid))return{t:'m',id:pid};if(gById.has(pid))return{t:'g',id:pid};if(promotedById.has(pid))return{t:'m',id:promotedById.get(pid)};if(pid)return null;if(byName.has(name))return{t:'m',id:byName.get(name)};if(gByName.has(name))return{t:'g',id:gByName.get(name)};return null;};
   const whoByName=new Map(post.names.map((name,index)=>[name,resolve(name,index)]));
   const addFor=(name,field)=>{const w=whoByName.get(name);if(!w)return;bump(w.t==='m'?deltas:gDeltas,w.id,field);};
-  const attended=new Set();for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
+  const attended=new Set();if(attendancePolicy(post).eligible)for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
   const scoredPlayed=new Map(),scoredLost=new Set();
   for(let ri=0;ri<post.schedule.length;ri++){
     if(!isScored(ri))continue;
@@ -252,6 +254,7 @@ export default {async fetch(request,env){
     if(privateRead||memberAction){const blocked=await requireMember(request,env);if(blocked)return blocked;}
     try{
       if(!env.DB)throw Error('Storage unavailable');
+      if(path==='/api/attendance-correction')return await attendanceCorrection(request,env);
   if(path==='/api/people'&&request.method==='GET'){
     if(!env.DB)return json({error:'Storage unavailable'},503);
     const weekly=await readWeeklyResults(env.DB);

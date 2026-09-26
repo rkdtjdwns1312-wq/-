@@ -27,6 +27,7 @@ export async function runWeeklyResultsChecks(){
     assert.equal((await display()).id,null);
     const up=await add('주간 상승','member',29),high=await add('주간 상위','member',80),down=await add('주간 하락','member',30),floor=await add('주간 보호','member',20),guest=await add('주간 게스트','guest',20);
     const all=[up,high,down,floor,guest];
+    for(let i=0;i<11;i++)all.push(await add('주간 휴식 '+i,'member',60));
     const a={title:'확정 A',names:all.map(p=>p.name),participantIds:all.map(p=>p.id),courts:2,rounds:2,schedule:[0,1].map(()=>({method:'same',g:[[up.name,high.name,down.name,floor.name],[up.name,high.name,down.name,guest.name]]})),results:{'0-0':'a','0-1':'a','1-0':'a','1-1':'a'}};
     await save('weekly-a',a);await settle('weekly-a');
     const first=await display(),firstLedger=ledger();
@@ -84,7 +85,8 @@ export async function runWeeklyResultsChecks(){
     const beforeB=await display();
     const bPlayers=[people.find(p=>p.member_id===high.id),...people.filter(p=>![up.id,high.id,down.id,floor.id,promoted.member_id].includes(p.member_id)).slice(0,2)];
     const bNames=[up.name,...bPlayers.map(p=>p.name)],bIds=[up.id,...bPlayers.map(p=>p.member_id)];
-    const b={title:'확정 B',names:bNames,participantIds:bIds,courts:1,rounds:1,schedule:[{method:'same',g:[bNames]}],results:{'0-0':'b'}};
+    const bRest=people.filter(p=>!bIds.includes(p.member_id)&&![down.id,floor.id,promoted.member_id].includes(p.member_id)).slice(0,12);
+    const b={title:'확정 B',names:[...bNames,...bRest.map(p=>p.name)],participantIds:[...bIds,...bRest.map(p=>p.member_id)],courts:1,rounds:1,schedule:[{method:'same',g:[bNames]}],results:{'0-0':'b'}};
     await save('weekly-b',b);assert.deepEqual(await display(),beforeB);
     const wrongVersion=await call('/api/posts/weekly-b/settle','POST',{version:2,operation:crypto.randomUUID()});
     assert.equal(wrongVersion.status,409);assert.deepEqual(await display(),beforeB);
