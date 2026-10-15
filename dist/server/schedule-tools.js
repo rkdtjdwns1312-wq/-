@@ -188,13 +188,25 @@ export function createScheduleTools(){
     for(const e of entries)schedule[e.ri].g[e.mi]=e.m.map(i=>roster[i].name);
   }
   function replacePlayer(d,ri,mi,si,next){
-    const match=d.schedule[ri].g[mi];
-    if(next===match[si])return;
+    const round=d.schedule?.[ri],match=round?.g?.[mi];
+    if(!match||!Number.isInteger(si)||si<0||si>=match.length)throw Error('교환할 선수 자리를 확인해주세요.');
+    const previous=match[si];
+    if(next===previous)return;
     if(!availableNames(d,ri).includes(next))throw Error('이 라운드에 아직 도착하지 않은 참가자는 넣을 수 없어요.');
-    if(match.some((name,i)=>i!==si&&name===next))throw Error('같은 경기에는 한 사람을 두 번 넣을 수 없어요. 다른 경기의 중복 출전은 가능해요.');
+    // Prefer the visible position in this game. Legacy extra games may contain
+    // the same player more than once; never guess which other court to change.
+    const positions=[];
+    round.g.forEach((game,court)=>game.forEach((name,slot)=>{if(name===next)positions.push({court,slot});}));
+    const local=positions.filter(p=>p.court===mi);
+    if(local.length>1||!local.length&&positions.length>1)throw Error('선택한 참가자가 여러 대진에 있어 교환할 자리를 정할 수 없어요. 긴급교체에서 대진과 자리를 지정해주세요.');
+    const target=local[0]||positions[0];
+    if(target&&target.court!==mi&&round.g[target.court].includes(previous))throw Error('맞교환하면 같은 경기에 한 사람이 두 번 들어가요. 긴급교체에서 자리를 지정해주세요.');
     match[si]=next;
-    if(d.results)delete d.results[ri+'-'+mi];
-    if(d.matchProgress)delete d.matchProgress[ri+'-'+mi];
+    if(target)round.g[target.court][target.slot]=previous;
+    for(const court of new Set([mi,...(target?[target.court]:[])])){
+      if(d.results)delete d.results[ri+'-'+court];
+      if(d.matchProgress)delete d.matchProgress[ri+'-'+court];
+    }
     refreshRound(d,ri);
   }
   function generate(roster,courts,rounds,methods){

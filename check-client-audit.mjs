@@ -322,6 +322,29 @@ function checkEditorRosterIsolation(){
   assert.deepEqual(h.roster(),[],'an editor opened after a failed detail roster read must retain its unavailable roster instead of using stale people');
 }
 
+function checkEditorSwapHandler(){
+  const elements=new Map(),alerts=[];
+  const build=new Function('scheduleTools','elements','alerts','esc',`
+    let draft=null,editRoster=[],dirty=false;const people=[];
+    const stopPoll=()=>{},startDraft=value=>{draft=structuredClone(value);},app={innerHTML:''},crumb=()=>'',scheduleHTML=d=>JSON.stringify(d),openPicker=()=>{},save=()=>{},cancelEdit=()=>{},alert=text=>alerts.push(text),confirm=()=>true,changed=()=>{dirty=true;};
+    const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',value:''});return elements.get(id);};
+    ${actual('editSchedule')}
+    return {editSchedule,state:()=>draft,dirty:()=>dirty,html:()=>app.innerHTML};
+  `);
+  const h=build(createScheduleTools(),elements,alerts,esc);
+  const original={id:'swap-ui',version:1,title:'자리 교환',names:['A','B','C','D','E','F','G','H','I'],schedule:[{g:[['A','B','C','D'],['E','F','G','H']],rest:['I']}],results:{'0-0':'a','0-1':'b'},matchProgress:{}};
+  h.editSchedule(original);
+  assert.match(h.html(),/같은 라운드의 두 자리가 맞교환/);
+  const select=(m,s,value)=>elements.get('editMatches').onchange({target:{matches:()=>true,dataset:{r:'0',m:String(m),s:String(s)},value}});
+  select(0,0,'E');
+  assert.deepEqual(h.state().schedule[0].g,[['E','B','C','D'],['A','F','G','H']]);
+  assert.deepEqual(h.state().results,{});assert.equal(h.dirty(),true);
+  assert.equal(original.schedule[0].g[0][0],'A','unsaved editor changes do not mutate the loaded detail');
+  select(0,0,'I');assert.deepEqual(h.state().schedule[0].rest,['E']);
+  assert.equal(JSON.parse(elements.get('editMatches').innerHTML).schedule[0].g[0][0],'I','both positions repaint from updated draft');
+  assert.deepEqual(alerts,[]);
+}
+
 async function checkSettlementVersions(){
   const draft={id:'settle-me',version:7};
   {
@@ -453,6 +476,7 @@ export async function runClientAuditChecks(){
   checkPartnerSummaryDisplay();
   checkMatchWarnings();
   checkEditorRosterIsolation();
+  checkEditorSwapHandler();
   await checkSettlementVersions();
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();

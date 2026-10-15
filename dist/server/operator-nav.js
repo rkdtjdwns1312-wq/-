@@ -20,9 +20,9 @@ body.operator-layout{padding-left:140px}
 .operator-nav-link:focus-visible{outline:3px solid #fff;outline-offset:2px;background:#0b9449}
 .operator-layout main,.operator-layout .match,.operator-layout .teams,.operator-layout .team-wrap{min-width:0}
 @media(max-width:650px){
-  body.operator-layout{padding-left:78px}
-  .operator-nav{left:6px;width:66px;padding:7px 5px;border-radius:12px}
-  .operator-nav-link{min-width:44px;min-height:44px;padding:5px 3px;font-size:.72rem;line-height:1.15}
+  body.operator-layout{padding-left:94px}
+  .operator-nav{left:6px;width:82px;padding:7px 5px;border-radius:12px}
+  .operator-nav-link{min-width:44px;min-height:44px;padding:5px 2px;font-size:.78rem;line-height:1.25;white-space:nowrap;word-break:normal;overflow-wrap:normal}
   .operator-layout main{padding:16px 8px}
   .operator-layout main .detail{padding:12px 10px}
   .operator-layout main .round-head{flex-wrap:wrap;gap:6px;padding:8px 10px}

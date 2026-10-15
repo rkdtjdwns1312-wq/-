@@ -243,12 +243,31 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.equal(t.scoreGap(gapDraft.names,gapDraft,gapRoster.map((p,i)=>i?p:{...p,adhoc:true})),null);
   const edit={names:players(9).map(p=>p.name),lateRounds:{'9':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:[]}],results:{'0-0':'a','0-1':'b'},matchProgress:{'0-0':'playing','0-1':'playing'}};
   t.replacePlayer(edit,0,0,0,'5');
-  assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['5','6','7','8']]);
-  assert.deepEqual(edit.schedule[0].rest,['1']);assert.deepEqual(edit.schedule[0].late,['9']);
-  assert.deepEqual(edit.results,{'0-1':'b'});
-  assert.deepEqual(edit.matchProgress,{'0-1':'playing'});
-  assert.throws(()=>t.replacePlayer(edit,0,0,0,'2'),/같은 경기/);
+  assert.deepEqual(edit.schedule[0].g,[['5','2','3','4'],['1','6','7','8']]);
+  assert.deepEqual(edit.schedule[0].rest,[]);assert.deepEqual(edit.schedule[0].late,['9']);
+  assert.deepEqual(edit.results,{});
+  assert.deepEqual(edit.matchProgress,{});
+  t.replacePlayer(edit,0,0,0,'2');
+  assert.deepEqual(edit.schedule[0].g[0],['2','5','3','4'],'same court selection swaps exact positions');
   assert.throws(()=>t.replacePlayer(edit,0,0,0,'9'),/아직 도착/);
+  const noOp=structuredClone(edit);t.replacePlayer(edit,0,0,0,'2');assert.deepEqual(edit,noOp);
+  const rested={names:players(10).map(p=>p.name),lateRounds:{'10':1},schedule:[{g:[['1','2','3','4'],['5','6','7','8']],rest:['9'],late:['10']},{g:[['1','2','3','4']]}],results:{'0-0':'a','0-1':'b','1-0':'a'},matchProgress:{'0-0':'playing','0-1':'playing','1-0':'playing'}};
+  const otherRound=structuredClone(rested.schedule[1]);
+  t.replacePlayer(rested,0,0,0,'9');
+  assert.deepEqual(rested.schedule[0].rest,['1'],'the replaced player takes the rest slot');
+  assert.deepEqual(rested.schedule[0].late,['10']);
+  assert.deepEqual(rested.schedule[1],otherRound);
+  assert.deepEqual(rested.results,{'0-1':'b','1-0':'a'});
+  assert.deepEqual(rested.matchProgress,{'0-1':'playing','1-0':'playing'});
+  t.replacePlayer(rested,0,0,0,'1');assert.deepEqual(rested.schedule[0].rest,['9']);
+  const repeatedEdit={...structuredClone(rested),schedule:[{g:[['1','2','3','4'],['5','6','7','8'],['5','6','9','10']]}]};
+  const beforeRepeated=structuredClone(repeatedEdit);
+  assert.throws(()=>t.replacePlayer(repeatedEdit,0,0,0,'5'),/여러 대진/);assert.deepEqual(repeatedEdit,beforeRepeated,'ambiguous exchange must be atomic');
+  t.replacePlayer(repeatedEdit,0,1,1,'5');assert.deepEqual(repeatedEdit.schedule[0].g[1],['6','5','7','8'],'local exchange is unambiguous even with extra games');
+  assert.deepEqual(repeatedEdit.schedule[0].g[2],beforeRepeated.schedule[0].g[2]);
+  const collision={...structuredClone(rested),schedule:[{g:[['1','2','3','4'],['1','5','6','7']]}]};
+  const beforeCollision=structuredClone(collision);
+  assert.throws(()=>t.replacePlayer(collision,0,0,0,'5'),/한 사람이 두 번/);assert.deepEqual(collision,beforeCollision);
   const progress={schedule:[
     {method:'same',g:[['1','2','3','4'],['5','6','7','8']]},
     {method:'random',g:[['1','3','5','7']]},
@@ -279,11 +298,12 @@ export async function runScheduleChecks({worker,env,origin}){
   assertSameRotation(saved.schedule,roster);
   assertAdjacentBoxes(saved.schedule,roster);
   assert.ok(saved.schedule.slice(0,2).every(r=>r.late.includes(roster[0].name)&&!r.rest.includes(roster[0].name)));
-  const edited=structuredClone(saved),other=[...edited.schedule[0].g[1]];
+  const edited=structuredClone(saved),other=[...edited.schedule[0].g[1]],original=edited.schedule[0].g[0][0];
   t.replacePlayer(edited,0,0,0,other[0]);
   assert.equal((await call('/api/posts/schedule-ui-test','PUT',{kind:'schedule',version:edited.version,operation:crypto.randomUUID(),data:edited})).status,200);
   const reloaded=(await (await call('/api/posts/schedule-ui-test')).json()).data;
-  assert.deepEqual(reloaded.schedule[0].g[1],other);assert.equal(reloaded.schedule[0].g[0][0],other[0]);
+  assert.deepEqual(reloaded.schedule[0].g[1],[original,...other.slice(1)]);assert.equal(reloaded.schedule[0].g[0][0],other[0]);
+  assert.deepEqual(reloaded.schedule.slice(1),saved.schedule.slice(1),'saved exchange preserves other rounds');
   // All-round late participants receive neither attendance nor match points.
   const attendanceRoster=(await (await call('/api/rankings')).json()).items.slice(0,16);
   const names=attendanceRoster.map(p=>p.name),alwaysLate=names[0];

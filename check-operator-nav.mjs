@@ -28,7 +28,8 @@ export function runOperatorNavChecks(){
   assert.match(operatorNavCss,/max-height:calc\(100dvh - 24px\);[\s\S]*overflow:auto/,'short viewports scroll the rail itself');
   assert.match(operatorNavCss,/body\.operator-layout\{padding-left:140px\}/,'desktop operator pages reserve rail space');
   assert.match(operatorNavCss,/min-width:44px;min-height:44px/,'links meet the 44px focus target size');
-  assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*body\.operator-layout\{padding-left:78px\}[\s\S]*\.operator-nav\{left:6px;width:66px/,'mobile guard narrows both body rail and fixed menu');
+  assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*body\.operator-layout\{padding-left:94px\}[\s\S]*\.operator-nav\{left:6px;width:82px/,'mobile guard reserves space for the readable fixed menu');
+  assert.match(operatorNavCss,/\.operator-nav-link\{[^}]*font-size:\.78rem;[^}]*white-space:nowrap/,'mobile navigation labels stay on one line at a readable size');
   assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*\.operator-layout main \.matches\{grid-template-columns:minmax\(0,1fr\)\}/,'narrow operator content cannot retain a wide match grid');
   assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*\.operator-layout main\{padding:16px 8px\}[\s\S]*\.operator-layout main \.detail\{padding:12px 10px\}/,'mobile operator content uses the remaining rail width efficiently');
   assert.match(operatorNavCss,/\.operator-layout main \.round-head\{flex-wrap:wrap;gap:6px;padding:8px 10px\}[\s\S]*\.round-head h3\{white-space:nowrap;font-size:1rem\}/,'round titles wrap as a unit instead of character by character');
