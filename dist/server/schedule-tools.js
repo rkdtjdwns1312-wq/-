@@ -216,6 +216,9 @@ export function createScheduleTools(){
     for(const p of roster){const late=p.lateRounds??0;if(!Number.isInteger(late)||late<0||late>5)throw Error('늦참은 0~5라운드 사이로 지정해주세요.');}
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
+    // Two or more missed rounds exempt guests/operators from further rest,
+    // including when they also have the late-registration priority flag.
+    const lateRoleRestExempt=p=>p.lateRounds>=2&&(p.type==='guest'||p.operator);
     const restCount=new Map(roster.map(p=>[p.id,0])),pairCount=new Map();
     const out=[],adjacentPools=[];let sameIndex=0;
     for(let ri=0;ri<rounds;ri++){
@@ -224,9 +227,9 @@ export function createScheduleTools(){
       const cap=Math.min(courts,Math.floor(available.length/4)),restSlots=available.length-cap*4;
       // Each priority participant rests once; ordinary members may rest again,
       // choosing the least-rested first with a shuffled tie break.
-      const candidates=shuffle(available).filter(p=>priority(p)===3||restCount.get(p.id)===0)
+      const candidates=shuffle(available).filter(p=>!lateRoleRestExempt(p)&&(priority(p)===3||restCount.get(p.id)===0))
         .sort((a,b)=>priority(a)-priority(b)||(restCount.get(a.id)-restCount.get(b.id)));
-      if(candidates.length<restSlots)throw Error((ri+1)+'라운드: 신청늦음·게스트·운영진의 휴식 1회 제한으로 대진을 채울 수 없어요. 코트 수를 늘리거나 참가자·라운드 수를 조정해주세요.');
+      if(candidates.length<restSlots)throw Error((ri+1)+'라운드: 신청늦음·게스트·운영진의 휴식 1회 제한 또는 늦참 2라운드 이상 운영진·게스트의 추가 휴식 제외 조건으로 대진을 채울 수 없어요. 코트 수를 늘리거나 참가자·라운드 수를 조정해주세요.');
       const resting=candidates.slice(0,restSlots),restIds=new Set(resting.map(p=>p.id));
       resting.forEach(p=>restCount.set(p.id,restCount.get(p.id)+1));
       const playing=available.filter(p=>!restIds.has(p.id)),method=methods[ri]||'random',groups=[];

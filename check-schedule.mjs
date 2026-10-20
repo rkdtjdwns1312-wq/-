@@ -154,6 +154,44 @@ export async function runScheduleChecks({worker,env,origin}){
   const arrivals=t.generate(late,2,5,Array(5).fill('balanced'));
   for(const r of arrivals.slice(0,2)){assert.deepEqual(r.late,['1']);assert.ok(!r.g.flat().includes('1'));assert.ok(!r.rest.includes('1'));}
   assert.deepEqual(arrivals[2].rest,['1']);assert.ok(arrivals[3].g.flat().includes('1'));assert.ok(arrivals[4].g.flat().includes('1'));
+  // A guest/operator who misses at least two opening rounds must not be
+  // selected for any automatic rest after arriving, including when late
+  // registration also applies. Their late rounds remain absent from all
+  // three partitions until arrival.
+  for(const lateRounds of [2,3,4,5])for(const method of ['random','same','balanced'])for(const lateRegistration of [false,true]){
+    const protectedRoster=players(13).map((p,i)=>({...p,
+      lateRounds:i===0||i===1?lateRounds:0,
+      type:i===0?'guest':'member',operator:i===1,
+      lateRegistration:lateRegistration&&(i===0||i===1)
+    }));
+    const made=t.generate(protectedRoster,3,Math.min(7,lateRounds+2),Array.from({length:Math.min(7,lateRounds+2)},()=>method));
+    for(const person of protectedRoster.slice(0,2)){
+      assert.ok(made.slice(0,person.lateRounds).every(r=>r.late.includes(person.name)&&!r.rest.includes(person.name)&&!r.g.flat().includes(person.name)));
+      assert.ok(made.slice(person.lateRounds).every(r=>!r.rest.includes(person.name)),`${method}: late ${lateRounds} role player ${person.name} must never rest after arrival`);
+    }
+    for(const r of made){const playing=r.g.flat();assert.equal(new Set([...playing,...r.rest,...r.late]).size,protectedRoster.length);assert.equal(playing.length+r.rest.length+r.late.length,protectedRoster.length);}
+  }
+  // One-round late guests/operators retain the existing one-rest priority;
+  // late ordinary members keep normal rest rotation. A late-registration-only
+  // ordinary member also keeps its existing one-rest priority.
+  const roleThreshold=players(13).map((p,i)=>({...p,
+    lateRounds:i<4?i%2:0,type:i===0||i===2?'guest':'member',operator:i===1||i===3,
+    lateRegistration:i===0||i===1||i===4
+  }));
+  const thresholdRounds=t.generate(roleThreshold,3,5,Array(5).fill('random'));
+  for(const p of roleThreshold.filter(p=>p.lateRounds<2&&(p.type==='guest'||p.operator)||p.lateRegistration&&p.type==='member'&&!p.operator))
+    assert.equal(thresholdRounds.filter(r=>r.rest.includes(p.name)).length,1,`${p.name} retains existing priority one rest`);
+  const ordinaryLate=players(13);ordinaryLate[0].lateRounds=2;
+  const ordinaryRounds=t.generate(ordinaryLate,3,15,Array(15).fill('random'));
+  assert.ok(ordinaryRounds.slice(2).some(r=>r.rest.includes(ordinaryLate[0].name)),'ordinary member with two late rounds remains eligible for rest');
+  const exhaustedPriority=players(11).map((p,i)=>({...p,
+    lateRounds:i>=9?5:0,type:i>=9?'guest':'member',operator:false,
+    lateRegistration:i<9
+  }));
+  for(const method of ['random','same','balanced'])assert.throws(
+    ()=>t.generate(exhaustedPriority,2,9,Array(9).fill(method)),/휴식 제한|휴식 1회/,
+    `${method} must report infeasibility instead of resting an exempt late role player`
+  );
   assert.equal(t.generate(players(4).map(p=>({...p,lateRounds:2})),1,3,['same','balanced','random'])[0].g.length,0);
   const onlyPriority=players(5).map(p=>({...p,type:'guest'}));
   assert.throws(()=>t.generate(onlyPriority,1,6,Array(6).fill('same')),/휴식 1회 제한/);
@@ -283,8 +321,10 @@ export async function runScheduleChecks({worker,env,origin}){
 
   const call=(path,method='GET',body)=>worker.fetch(new Request(origin+path,{method,headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},...(body?{body:JSON.stringify(body)}:{})}),env);
   const members=(await (await call('/api/rankings')).json()).items.slice(0,13);
-  const roster=members.map((m,i)=>({id:m.member_id,name:m.name,points:150-i*7,type:'member',lateRounds:i===0?2:0,lateRegistration:i===0}));
-  const data={kind:'schedule',title:'늦참·대진 편집 검증',names:roster.map(p=>p.name),participantIds:roster.map(p=>p.id),courts:3,rounds:5,lateRounds:{[roster[0].name]:2},lateRegistration:[roster[0].name],schedule:t.generate(roster,3,5,['same','balanced','random','same','balanced']),results:{}};
+  const roster=members.map((m,i)=>({id:m.member_id,name:m.name,points:150-i*7,type:i===1?'guest':'member',operator:i===1,lateRounds:i<2?2:0,lateRegistration:i<2}));
+  const lateRounds=Object.fromEntries(roster.filter(p=>p.lateRounds).map(p=>[p.name,p.lateRounds]));
+  const lateRegistration=roster.filter(p=>p.lateRegistration).map(p=>p.name);
+  const data={kind:'schedule',title:'늦참·대진 편집 검증',names:roster.map(p=>p.name),participantIds:roster.map(p=>p.id),courts:3,rounds:5,lateRounds,lateRegistration,schedule:t.generate(roster,3,5,['same','balanced','random','same','balanced']),results:{}};
   const put=d=>call('/api/posts/schedule-ui-test','PUT',{kind:'schedule',version:0,operation:crypto.randomUUID(),data:d});
   assert.equal((await put({...data,lateRounds:{[roster[0].name]:1.5}})).status,400);
   const bad=structuredClone(data);bad.schedule[0].g[0][0]=roster[0].name;
@@ -297,7 +337,10 @@ export async function runScheduleChecks({worker,env,origin}){
   assert.deepEqual(saved.schedule.map(r=>r.method),['same','balanced','random','same','balanced']);
   assertSameRotation(saved.schedule,roster);
   assertAdjacentBoxes(saved.schedule,roster);
-  assert.ok(saved.schedule.slice(0,2).every(r=>r.late.includes(roster[0].name)&&!r.rest.includes(roster[0].name)));
+  for(const p of roster.slice(0,2)){
+    assert.ok(saved.schedule.slice(0,2).every(r=>r.late.includes(p.name)&&!r.rest.includes(p.name)));
+    if(p.type==='guest'||p.operator)assert.ok(saved.schedule.slice(2).every(r=>!r.rest.includes(p.name)),'saved guest/operator late role is never automatically rested after arrival');
+  }
   const edited=structuredClone(saved),other=[...edited.schedule[0].g[1]],original=edited.schedule[0].g[0][0];
   t.replacePlayer(edited,0,0,0,other[0]);
   assert.equal((await call('/api/posts/schedule-ui-test','PUT',{kind:'schedule',version:edited.version,operation:crypto.randomUUID(),data:edited})).status,200);
