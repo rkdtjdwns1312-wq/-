@@ -88,7 +88,7 @@ async function checkBoardListArrows(){
     const $=id=>elements.get(id)||null;
     return {app,$,api:async path=>({items,hasMore:false}),crumb:()=>'',elements};
   };
-  const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-unscored',title:'미반영 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'unscored'}];
+  const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-unscored',title:'미반영 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'unscored'},{id:'schedule-attendance',title:'출석 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'attendance'}];
   for(const kind of ['notice','schedule']){
     const h=makeHarness(items),board=compile('board',{app:h.app,crumb:h.crumb,EDITOR:'operator',$:h.$,api:h.api,esc,date:()=> '날짜',message(){},routeToken:1});
     await board(kind,1);
@@ -96,7 +96,7 @@ async function checkBoardListArrows(){
     assert.match(html,new RegExp('href="#post/'+encodeURIComponent('공지 1')+'"'),'board list must preserve encoded notice links');
     assert.match(html,/href="#post\/schedule-1"/,'board list must preserve schedule links');
     assert.doesNotMatch(html,/<span aria-hidden="true">→<\/span>/,kind+' list items must not render right arrows');
-    if(kind==='schedule')assert.match(html,/미반영마감/,'an unscored closed schedule must be labeled distinctly in the list');
+    if(kind==='schedule'){assert.match(html,/미반영마감/,'an unscored closed schedule must be labeled distinctly in the list');assert.match(html,/출석만 반영/,'an attendance-only closure must be labeled distinctly in the list');}
   }
   assert.match(source,/home-return/,'board home link must use the home-return style');
   assert.match(source,/'홈으로 가기'/,'board home link must say 홈으로 가기');
@@ -363,6 +363,13 @@ async function checkSettlementVersions(){
   }
   {
     const calls=[],messages=[];
+    const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async(message,options)=>{assert.equal(options.settlement,true);assert.equal(options.scoredAllowed,false);return 'attendance';},message:(text,error)=>messages.push({text,error}),api:async(path,options)=>{calls.push({path,body:JSON.parse(options.body)});return {data:{version:8,settlementMode:'attendance'}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
+    await endMatch(draft,1,false);
+    assert.deepEqual(calls,[{path:'/api/posts/settle-me/settle',body:{version:7,operation:'operation',mode:'attendance'}}],'an incomplete schedule may close with attendance-only points');
+    assert.match(messages.at(-1).text,/출석 \+1점/,'attendance-only success must explain that wins and losses were not applied');
+  }
+  {
+    const calls=[],messages=[];
     const endMatch=compile('endMatch',{saving:false,ending:false,currentDetail:()=>true,confirmDialog:async()=> 'scored',message:(text,error)=>messages.push({text,error}),api:async(...args)=>{calls.push(args);return {data:{version:8}};},EDITOR:'operator',crypto:{randomUUID:()=> 'operation'},routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
     await endMatch(draft,1,false);
     assert.equal(calls.length,0,'a forged scored choice for incomplete results must not write');
@@ -397,6 +404,12 @@ async function checkSettlementVersions(){
     await unsettlePost({...draft,settlementMode:'unscored'},1);
     assert.match(messages.at(-1).text,/점수는 바뀌지 않았고/,'reopening an unscored closure must say that points were unchanged');
   }
+  {
+    const messages=[];
+    const unsettlePost=compile('unsettlePost',{saving:false,unsettling:false,currentDetail:()=>true,confirmDialog:async text=>{assert.match(text,/출석 점수가 되돌려지고/);return true;},message:(text,error)=>messages.push({text,error}),api:async()=>({data:{version:8}}),EDITOR:'operator',routeToken:1,detail(){},window:{scrollTo(){}},refreshDetail:async()=>{}});
+    await unsettlePost({...draft,settlementMode:'attendance'},1);
+    assert.match(messages.at(-1).text,/출석 점수가 되돌아갔고/,'reopening attendance-only closure must describe its precise reversal');
+  }
 }
 
 async function checkConfirmationLifecycle(){
@@ -407,9 +420,11 @@ async function checkConfirmationLifecycle(){
   const escaped=confirmDialog('확인');h.dialog.dispatch('cancel');assert.equal(await escaped,false,'Escape must resolve false and close safely');
 
   const incomplete=confirmDialog('대진 마감',{settlement:true,scoredAllowed:false});
-  assert.match(h.dialog.innerHTML,/id="confirmNo"[^>]*>아니오[\s\S]*id="confirmYes"[^>]*>예[\s\S]*id="confirmUnscored"[^>]*>미반영마감/,'settlement confirmation must present No, Yes, then unscored close');
+  assert.match(h.dialog.innerHTML,/id="confirmNo"[^>]*>아니오[\s\S]*id="confirmYes"[^>]*>예[\s\S]*id="confirmAttendance"[^>]*>출석만 반영[\s\S]*id="confirmUnscored"[^>]*>미반영마감/,'settlement confirmation must present No, Yes, attendance-only, then unscored close');
   assert.equal(h.$('confirmYes').disabled,true,'Yes must be disabled while results are incomplete');
-  h.$('confirmYes').onclick();h.$('confirmUnscored').onclick();assert.equal(await incomplete,'unscored','an incomplete settlement can choose only unscored close');
+  assert.equal(h.$('confirmAttendance').disabled,false,'attendance-only must remain available while results are incomplete');
+  h.$('confirmYes').onclick();h.$('confirmAttendance').onclick();assert.equal(await incomplete,'attendance','an incomplete settlement may apply attendance only');
+  const unscored=confirmDialog('대진 마감',{settlement:true,scoredAllowed:false});h.$('confirmUnscored').onclick();assert.equal(await unscored,'unscored','an incomplete settlement may still close without points');
   const complete=confirmDialog('대진 마감',{settlement:true,scoredAllowed:true});
   assert.equal(h.$('confirmYes').disabled,false,'Yes must remain available when all results are complete');
   h.$('confirmYes').onclick();assert.equal(await complete,'scored','the normal settlement choice keeps an explicit scored mode');
@@ -481,9 +496,12 @@ export async function runClientAuditChecks(){
   await checkConfirmationLifecycle();
   await checkHistoryAndPeopleWrites();
   assert.match(source,/미반영마감 · 시드 미반영/,'an unscored locked detail must display the seed-preservation badge');
-  assert.match(styleSource,/\.confirm-actions\{[^}]*flex-wrap:wrap/,'three confirmation choices must wrap on narrow screens');
+  assert.match(source,/출석만 반영 완료/,'an attendance-only locked detail must display its own badge');
+  assert.match(styleSource,/\.confirm-actions\{[^}]*flex-wrap:wrap/,'four confirmation choices must wrap on narrow screens');
+  assert.match(styleSource,/\.settle-attendance\{[^}]*background:#f3e6cf/,'attendance-only button must use the requested light beige');
+  assert.match(styleSource,/\.settle-unscored\{[^}]*background:#e87361/,'unscored button must use the requested coral color');
   assert.match(source,/if\(\$\('endMatch'\)\)\$\('endMatch'\)\.onclick=\(\)=>endMatch\(d,token,allScoredDone\)/,'every open schedule must route its close button through the result-completeness guard');
-  console.log('PASS: actual client factories cover notice navigation, confirmation lifecycle, canceled login, local picker state, scored/unscored settlement modes, and people dialogs.');
+  console.log('PASS: actual client factories cover notice navigation, four-choice confirmation lifecycle, canceled login, local picker state, scored/attendance-only/unscored settlement modes, and people dialogs.');
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){await runClientAuditChecks();await runProgressUIChecks();await runLiveUIChecks();}

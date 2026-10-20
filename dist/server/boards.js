@@ -77,7 +77,8 @@ function validate(d,kind){
   return base;
 }
 async function settleSchedule(db,id,input){
-  const mode=input.mode||'scored';
+  const mode=Object.hasOwn(input,'mode')?input.mode:'scored';
+  if(!['scored','attendance','unscored'].includes(mode))return json({error:'마감 방식을 확인해주세요.'},400);
   const revision=await rosterRevision(db);
   const row=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   if(!row)return json({error:'게시글을 찾을 수 없습니다.'},404);
@@ -103,7 +104,7 @@ async function settleSchedule(db,id,input){
   const isVoid=match=>match.some(n=>absentSet.has(n));
   const missing=[];
   for(let ri=0;ri<post.schedule.length;ri++){if(!isScored(ri))continue;for(let mi=0;mi<post.schedule[ri].g.length;mi++)if(!isVoid(post.schedule[ri].g[mi])&&!validResult(results[`${ri}-${mi}`]))missing.push(`${ri+1}라운드 ${mi+1}번 대진`);}
-  if(missing.length)return json({error:`승패를 모두 입력해주세요. 미입력: ${missing.join(', ')}`},400);
+  if(mode==='scored'&&missing.length)return json({error:`승패를 모두 입력해주세요. 미입력: ${missing.join(', ')}`},400);
   const rankingRows=(await db.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results;
   if(!rankingRows.length)return json({error:'회원 점수표를 준비하지 못했습니다.'},503);
   const byId=new Map(rankingRows.map(row=>[row.member_id,row]));
@@ -118,9 +119,11 @@ async function settleSchedule(db,id,input){
   const resolve=(name,index)=>{const pid=Array.isArray(post.participantIds)?post.participantIds[index]:'';if(byId.has(pid))return{t:'m',id:pid};if(gById.has(pid))return{t:'g',id:pid};if(promotedById.has(pid))return{t:'m',id:promotedById.get(pid)};if(pid)return null;if(byName.has(name))return{t:'m',id:byName.get(name)};if(gByName.has(name))return{t:'g',id:gByName.get(name)};return null;};
   const whoByName=new Map(post.names.map((name,index)=>[name,resolve(name,index)]));
   const addFor=(name,field)=>{const w=whoByName.get(name);if(!w)return;bump(w.t==='m'?deltas:gDeltas,w.id,field);};
-  const attended=new Set();if(attendancePolicy(post).eligible)for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
+  // 운영진이 '출석만 반영'을 선택한 경우에는 일반 출석 제외 정책과 무관하게 실제 참석자에게 +1을 준다.
+  // 일반 점수 반영은 토요일 정모 예외를 포함한 attendancePolicy를 따른다.
+  const attended=new Set();if(mode==='attendance'||attendancePolicy(post).eligible)for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
   const scoredPlayed=new Map(),scoredLost=new Set();
-  for(let ri=0;ri<post.schedule.length;ri++){
+  if(mode==='scored')for(let ri=0;ri<post.schedule.length;ri++){
     if(!isScored(ri))continue;
     for(let mi=0;mi<post.schedule[ri].g.length;mi++){
       const match=post.schedule[ri].g[mi],winner=results[`${ri}-${mi}`];
@@ -133,17 +136,17 @@ async function settleSchedule(db,id,input){
     }
   }
   // MVP는 회원만(게스트 제외 — 요청 039 유지).
-  const mvpNames=[...scoredPlayed.keys()].filter(name=>!scoredLost.has(name)&&whoByName.get(name)?.t==='m').sort((a,b)=>(byId.get(whoByName.get(a).id)?.rank||9999)-(byId.get(whoByName.get(b).id)?.rank||9999));
+  const mvpNames=mode==='scored'?[...scoredPlayed.keys()].filter(name=>!scoredLost.has(name)&&whoByName.get(name)?.t==='m').sort((a,b)=>(byId.get(whoByName.get(a).id)?.rank||9999)-(byId.get(whoByName.get(b).id)?.rank||9999)):[];
   const at=new Date().toISOString();
   const nextRows=orderRankingRows(rankingRows.map(row=>scoredState(row,deltas.get(row.member_id),at)));
   const gNext=guestRows.map(row=>scoredState(row,gDeltas.get(row.guest_id),at));
   // 요청 078: 마감해도 제목은 그대로 두고, MVP는 mvp[]로만 저장한다(화면에서 제목 아래 작게 표시).
-  const nextPayload={...post,results,settledAt:at,settlementMode:'scored',mvp:mvpNames,title:post.title,preTitle:post.title};
+  const nextPayload={...post,results,settledAt:at,settlementMode:mode,mvp:mvpNames,title:post.title,preTitle:post.title};
   const statements=[
     db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),'settle-'+input.operation,at,id,input.version),
     // D1 batch is transactional: a failed version claim must abort ALL scoring.
     // The NOT NULL guard fails before any points/events are written.
-    db.prepare("INSERT INTO ranking_settlements (schedule_id,settled_at,operation,rank_order_before) VALUES (CASE WHEN changes()=1 AND EXISTS (SELECT 1 FROM board_posts WHERE id=? AND kind='schedule' AND version=? AND last_operation=? AND json_extract(payload,'$.settlementMode')='scored') THEN ? ELSE NULL END,?,?,?)").bind(id,input.version+1,'settle-'+input.operation,id,at,input.operation,JSON.stringify(rankingRows.map(r=>r.member_id)))
+    db.prepare("INSERT INTO ranking_settlements (schedule_id,settled_at,operation,rank_order_before) VALUES (CASE WHEN changes()=1 AND EXISTS (SELECT 1 FROM board_posts WHERE id=? AND kind='schedule' AND version=? AND last_operation=? AND json_extract(payload,'$.settlementMode')=?) THEN ? ELSE NULL END,?,?,?)").bind(id,input.version+1,'settle-'+input.operation,mode,id,at,input.operation,JSON.stringify(rankingRows.map(r=>r.member_id)))
   ];
   const memberUpdates=nextRows.map(next=>{
     const before=byId.get(next.member_id),d=deltas.get(next.member_id);
@@ -425,7 +428,7 @@ export default {async fetch(request,env){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 점수를 반영할 수 있습니다.'},403);
         const raw=await request.text();if(raw.length>4000)return json({error:'입력 내용을 확인해주세요.'},413);
-        let input;try{input=JSON.parse(raw);if(!input||typeof input!=='object'||Array.isArray(input)||!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation)||(input.mode!==undefined&&!['scored','unscored'].includes(input.mode)))throw Error('마감 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
+        let input;try{input=JSON.parse(raw);if(!input||typeof input!=='object'||Array.isArray(input)||!Number.isInteger(input.version)||input.version<1||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation)||(input.mode!==undefined&&!['scored','attendance','unscored'].includes(input.mode)))throw Error('마감 요청을 확인해주세요.');}catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
         return await settleSchedule(env.DB,settleMatch[1],input);
       }
       const unsettleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/unsettle$/);
