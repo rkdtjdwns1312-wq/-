@@ -59,4 +59,5 @@ export const css=`
   main{padding-right:12px;padding-left:12px}
   dialog{padding:18px 14px}
 }
+.match{border:1px solid #dcece1;box-shadow:none}.match.has-result{border-top-color:#dcece1}.match.state-playing{border-color:#03ac50;box-shadow:0 4px 14px rgba(3,172,80,.16)}
 `;

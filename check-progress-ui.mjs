@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { client } from './dist/server/boards-client.js';
+import { css } from './dist/server/boards-style.js';
 import { createScheduleTools } from './dist/server/schedule-tools.js';
 
 // Execute the shipped functions; only network, timers and DOM painting are mocked.
@@ -53,6 +54,18 @@ function harness(){
 const button=(winner='a')=>({dataset:{progressKey:'0-0',progressRound:'0',progressMatch:'0',progressNext:'playing',resultKey:'0-0',winner},closest:()=>({})});
 
 export async function runProgressUIChecks(){
+  assert.match(css,/\.match\{border:1px solid #dcece1;box-shadow:none\}/,'all match states use a neutral one-pixel border without shadow');
+  assert.match(css,/\.match\.has-result\{border-top-color:#dcece1\}/,'a result does not add a green border accent');
+  assert.match(css,/\.match\.state-playing\{border-color:#03ac50;box-shadow:/,'only playing matches receive the green outline and shadow');
+  {
+    const classes=new Set(['match','state-waiting']),matchEl={classList:{remove:(...names)=>names.forEach(name=>classes.delete(name)),add:name=>classes.add(name)},querySelector:()=>null};
+    const applyState=new Function('matchStateControl',actual('applyMatchState')+';return applyMatchState;')(()=>'<state badge>');
+    applyState(fixture(),matchEl,0,0,'playing');
+    assert.ok(classes.has('state-playing'));
+    applyState(fixture(),matchEl,0,0,'finished');
+    assert.ok(classes.has('state-finished'));
+    assert.ok(!classes.has('state-playing'),'finished transition clears the playing class');
+  }
   for(const kind of ['progress','result']){
     const h=harness(),d=fixture(),normal=h.getAPI();
     h.setAPI((path,options)=>options?normal(path,options):Promise.reject(Error('GET offline')));
