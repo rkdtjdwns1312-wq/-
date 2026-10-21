@@ -60,4 +60,5 @@ export const css=`
   dialog{padding:18px 14px}
 }
 .match{border:1px solid #dcece1;box-shadow:none}.match.has-result{border-top-color:#dcece1}.match.state-playing{border-color:#03ac50;box-shadow:0 4px 14px rgba(3,172,80,.16)}
+.match.state-finished{background:#f2f4f3;border-color:#d7ddda;border-top-color:#d7ddda;box-shadow:none}.match.state-finished .court{color:#68756e;background:#e8ece9;border-color:#d4dbd7}.match.state-finished .team-wrap:not(.win){background:#ecefed;border-color:#d9dfdc}.match-state.state-finished{color:#46534b;background:#e5e9e6;border-color:#cbd3ce}
 `;

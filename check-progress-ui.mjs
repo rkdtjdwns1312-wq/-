@@ -57,6 +57,12 @@ export async function runProgressUIChecks(){
   assert.match(css,/\.match\{border:1px solid #dcece1;box-shadow:none\}/,'all match states use a neutral one-pixel border without shadow');
   assert.match(css,/\.match\.has-result\{border-top-color:#dcece1\}/,'a result does not add a green border accent');
   assert.match(css,/\.match\.state-playing\{border-color:#03ac50;box-shadow:/,'only playing matches receive the green outline and shadow');
+  assert.match(css,/\.match\.state-finished\{background:#f2f4f3;border-color:#d7ddda;border-top-color:#d7ddda;box-shadow:none\}/,'finished cards use a subdued neutral surface');
+  assert.match(css,/\.match\.state-finished \.court\{color:#68756e;background:#e8ece9;border-color:#d4dbd7\}/,'finished court labels are subdued');
+  assert.match(css,/\.match\.state-finished \.team-wrap:not\(\.win\)\{background:#ecefed;border-color:#d9dfdc\}/,'finished non-winning teams are subdued while winner styling remains intact');
+  assert.match(css,/\.match-state\.state-finished\{color:#46534b;background:#e5e9e6;border-color:#cbd3ce\}/,'finished badges use readable neutral contrast');
+  assert.match(css,/\.match\.state-playing\{border-color:#03ac50;box-shadow:0 4px 14px rgba\(3,172,80,\.16\)\}/,'the playing-only green outline remains');
+  assert.doesNotMatch(css,/\.match\.state-finished[^\n}]*(?:opacity|filter|pointer-events)/,'finished styling does not dim content or alter interaction');
   {
     const classes=new Set(['match','state-waiting']),matchEl={classList:{remove:(...names)=>names.forEach(name=>classes.delete(name)),add:name=>classes.add(name)},querySelector:()=>null};
     const applyState=new Function('matchStateControl',actual('applyMatchState')+';return applyMatchState;')(()=>'<state badge>');
