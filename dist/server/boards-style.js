@@ -66,5 +66,4 @@ export const css=`
 .home-intro{padding:12px 0 24px}.home-intro img.home-court-banner{display:block;width:100%;height:auto;object-fit:contain;mix-blend-mode:normal}
 @media(max-width:650px){.home-intro{padding:16px 0}}
 .menus .menu{border:1px solid #03ac50}.menus .menu:hover{border-color:#03b958}
-header{background:#78ad8f;border-bottom:1px solid #659b7d}header .brand-name,header .tagline,header .access{color:#fff}header .tagline,header .access{font-weight:600;text-shadow:0 1px 2px rgba(24,67,43,.38)}header .tagline{border-left-color:rgba(255,255,255,.72)}header .brand:hover{text-decoration:underline;text-decoration-color:rgba(255,255,255,.8);text-underline-offset:4px}header .brand:focus-visible{outline:3px solid #fff;outline-offset:4px;border-radius:3px}
 `;
