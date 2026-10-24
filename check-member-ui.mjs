@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { client, createMemberAccess, memberMenuLabel, memberOnlyHash } from './dist/server/boards-client.js';
+import { css } from './dist/server/boards-style.js';
 
 const source=client.toString();
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
@@ -44,6 +45,12 @@ async function checkPublicHomeMvp(){
   const app={innerHTML:''},mvp={innerHTML:''};let calls=0;
   const home=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>false},api:async()=>{calls++;throw Error('public home must not request MVP');},esc});
   await home();assert.equal(calls,0,'public home does not fetch or display MVP data');assert.match(app.innerHTML,/href="#notice"/,'public home retains the notice route');
+  assert.match(app.innerHTML,/class="home-court-banner" src="\/mascot-court-banner\.png" alt="[^"]+" width="2172" height="724"/,'home uses the full-size 3:1 court mascot banner with accessible text');
+  assert.match(css,/\.home-intro img\.home-court-banner\{display:block;width:100%;height:auto;object-fit:contain;mix-blend-mode:normal\}/,'the home banner overrides legacy mascot image dimensions without cropping');
+  assert.match(css,/\.home-intro\{padding:12px 0 24px\}/,'desktop banner spacing stays compact');assert.match(css,/@media\(max-width:650px\)\{\.home-intro\{padding:16px 0\}\}/,'mobile banner spacing stays compact');
+  assert.match(css,/header\{background:#78ad8f;border-bottom:1px solid #659b7d\}/,'header uses the requested pastel green and matching border');assert.match(css,/header \.tagline,header \.access\{font-weight:600;text-shadow:0 1px 2px rgba\(24,67,43,\.38\)\}/,'small white header text has extra contrast without changing its size');
+  assert.match(css,/\.menus \.menu\{border:1px solid #03ac50\}/,'all four home menu cards use the accounting link green outline');assert.match(css,/\.menus \.menu:hover\{border-color:#03b958\}/,'menu hover keeps its existing green highlight at the same border thickness');
+  assert.match(css,/\.empty img\{width:135px;height:135px;object-fit:contain;display:block;margin:auto\}/,'board empty-state mascots retain their existing square sizing');
   assert.match(app.innerHTML,/href="#schedule"/,'home retains the schedule menu');assert.match(app.innerHTML,/href="#live"/,'home retains live matches');assert.match(app.innerHTML,/href="#seed"/,'home retains seed status');
   assert.match(app.innerHTML,/class="home-ledger-button" href="#ledger"/,'home includes compact ledger link');
   assert.doesNotMatch(app.innerHTML,/새로운 게임을 준비하시나요\?|\+ 대진 만들기|id="homeNew"/,'home removes the create-match prompt and button');

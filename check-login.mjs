@@ -316,6 +316,12 @@ if(process.argv.includes('--serve')){
   const previewPort=Number(process.env.KOKKIRI_PREVIEW_PORT||4173);
   assert.ok(Number.isInteger(previewPort)&&previewPort>=1024&&previewPort<=65535,'유효한 로컬 미리보기 포트가 필요합니다');
   createServer(async(req,res)=>{
+    // Match Cloudflare's public assets for visual QA without exposing local files.
+    const assetPath=new URL(req.url,'http://localhost').pathname;
+    if(['GET','HEAD'].includes(req.method)&&['/mascot-play.png','/mascot-rest.png','/mascot-court-banner.png'].includes(assetPath)){
+      try{const image=readFileSync(new URL('./public'+assetPath,import.meta.url));res.writeHead(200,{'content-type':'image/png','content-length':image.length});res.end(req.method==='HEAD'?undefined:image);}
+      catch{res.writeHead(404);res.end('Asset not found');}return;
+    }
     if(req.url.startsWith('/__mobile')){
       const view=new URL(req.url,origin).searchParams.get('view'),hash=view==='home'?'home':view==='schedule'?'post/schedule-ui-test':'live';
       res.writeHead(200,{'content-type':'text/html; charset=utf-8'});
