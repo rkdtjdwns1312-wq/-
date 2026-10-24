@@ -22,14 +22,16 @@ function validEntries(entries){
   return true;
 }
 // Stable order and normalization make equivalent retries identical. These
-// lists are independent records and never update accounting totals or people.
+// lists are authoritative records. Ledger GET derives income from them; list
+// writes never copy rows into ledger_state or change manual revisions/people.
 const payloadOf=value=>({entries:value.entries.map(entry=>({id:entry.id.toLowerCase(),name:entry.name.trim(),amount:entry.amount,date:entry.date}))});
-function unpack(row){
+export function unpackLedgerList(row){
   if(!row||!Number.isSafeInteger(row.version)||row.version<0)throw new Error('Missing list state');
   const payload=JSON.parse(row.payload);
   if(!exactKeys(payload,['entries'])||!validEntries(payload.entries))throw new Error('Invalid list state');
   return {...payloadOf(payload),version:row.version,updatedAt:row.updated_at};
 }
+const unpack=unpackLedgerList;
 async function readInput(request){
   const oversized=()=>({error:json({error:'입력 내용은 256 KiB 이하여야 합니다.'},413)});
   if(Number(request.headers.get('content-length'))>MAX_BYTES)return oversized();

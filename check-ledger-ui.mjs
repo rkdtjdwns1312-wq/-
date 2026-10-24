@@ -27,7 +27,7 @@ function matches(n,selector){
   return n.tag===selector;
 }
 function parse(html){
-  const out=[];for(const m of html.matchAll(/<(button|input|select|form|p|time|textarea|label|div|a|h1|h2|section|table|tr|td|th|dialog)\b([^>]*)>/g)){
+  const out=[];for(const m of html.matchAll(/<(button|input|select|form|p|time|textarea|label|div|a|h1|h2|section|table|tr|td|th|dialog|small)\b([^>]*)>/g)){
     const attrs={};for(const a of m[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g))attrs[a[1]]=a[2]??'';
     const child=node(m[1],attrs);let content='';
     if(child.tag==='textarea')content=html.slice(m.index+m[0].length).split('</textarea>')[0];
@@ -74,6 +74,25 @@ export async function runLedgerUIChecks(){
   assert.match(memoStyle,/border:1px solid/,'memo retains a subtle outline');
   assert.doesNotMatch(memoStyle,/border-top:/,'memo has no thick green top border');
   await ledgerListNavigationChecks();
+  {
+    const linkedEntries=[{...entry('linked:prepaid:p1','2026-10-02','선납 회비 · 회원',3000),sourceKind:'prepaid',sourceId:'p1'},{...entry('linked:sponsors:s1','2026-10-03','찬조 · 후원',2000),sourceKind:'sponsors',sourceId:'s1'}];
+    const h=harness({initial:{...ledger([entry('manual','2026-10-01','별도 수입',1000)],100),linkedEntries}});await h.open();
+    assert.ok(h.app.innerHTML.includes('총 수입<strong class="ledger-income">6,000원</strong>'));
+    assert.ok(h.app.innerHTML.includes('현재 누계<strong>6,100원</strong>'));
+    assert.equal(h.app.querySelectorAll('.ledger-linked').length,2);
+    await h.app.querySelector('#ledgerEdit').dispatch('click');
+    assert.equal(h.app.querySelectorAll('[data-field="income"]').length,1,'only manual income is editable');
+    assert.equal(h.app.querySelectorAll('[data-delete]').length,1,'linked income cannot be deleted in ledger');
+    assert.equal(h.app.querySelectorAll('[data-linked-list]').length,2);
+    const amount=h.app.querySelector('[data-field="income"]');amount.value='1500';await amount.oninput();
+    assert.equal(h.app.querySelector('[data-balance-id="linked:sponsors:s1"]').textContent,'6,600원','manual changes recalculate linked running balances');
+    await h.app.querySelector('#ledgerSave').dispatch('click');
+    const write=h.calls.find(c=>c.method==='PUT');assert.equal(write.body.entries.length,1);assert.equal(write.body.entries[0].id,'manual');assert.ok(!('linkedEntries' in write.body),'derived entries are never copied into manual storage');
+    assert.equal(h.app.querySelectorAll('.ledger-linked').length,2,'save response preserves linked display');
+    h.setServer({...ledger([],100),linkedEntries:[{...linkedEntries[0],income:4000}]});await h.app.querySelector('#ledgerRefresh').dispatch('click');
+    assert.ok(h.app.innerHTML.includes('현재 누계<strong>4,100원</strong>'),'refresh reflects linked edits and deletions');
+    assert.ok(!h.app.innerHTML.includes('아직 등록된 거래가 없습니다.'),'linked-only ledger is not empty');
+  }
   {
     const secret='<script>alert("x")</script>',description='<img src=x onerror=alert(1)>',h=harness({editor:'',initial:ledger([entry('unsafe','2026-10-01',description,0,25,secret)])});await h.open();
     assert.equal(h.app.querySelector('#ledgerEdit'),null,'members cannot enter edit mode');

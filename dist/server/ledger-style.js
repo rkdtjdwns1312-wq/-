@@ -9,6 +9,7 @@ export const ledgerCss=`
 .ledger-summary strong{display:block;font-size:1.15rem;color:#20422f;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .ledger-summary>div:last-child strong{color:#176337}
 .ledger-income{color:#176337!important}.ledger-expense{color:#a13a30!important}
+.ledger-linked{display:inline-block;white-space:nowrap;font-size:.72rem;color:#176337;background:#edf8f0;border:1px solid #cfe6d5;border-radius:6px;padding:2px 5px;margin:3px 0}
 .ledger-opening{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ledger-opening input{max-width:240px}
 .ledger-scroll{max-width:100%;overflow-x:auto;border:1px solid #e1ece4;border-radius:12px;margin:14px 0}

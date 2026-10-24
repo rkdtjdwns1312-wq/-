@@ -1,4 +1,5 @@
 import { requireMember } from './member-access.js';
+import { unpackLedgerList } from './ledger-lists.js';
 
 const MAX_BYTES=512*1024,MAX_AMOUNT=1e12,MAX_ENTRIES=500;
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,6 +34,33 @@ function unpack(row){
   if(!exactKeys(payload,['openingBalance','entries'])||!validLedger(payload))throw new Error('Invalid ledger state');
   return {...payloadOf(payload),version:row.version,updatedAt:row.updated_at};
 }
+// One SQL snapshot reads manual state and BOTH source lists consistently. LEFT
+// JOIN deliberately retains missing sources so validation fails closed (503).
+async function readLedger(db){
+  const row=await db.prepare(`SELECT m.payload,m.version,m.updated_at,
+    p.payload AS prepaid_payload,p.version AS prepaid_version,p.updated_at AS prepaid_updated_at,
+    s.payload AS sponsors_payload,s.version AS sponsors_version,s.updated_at AS sponsors_updated_at
+    FROM ledger_state m
+    LEFT JOIN ledger_list_state p ON p.kind='prepaid'
+    LEFT JOIN ledger_list_state s ON s.kind='sponsors'
+    WHERE m.id=1`).first();
+  const manual=unpack(row);
+  const linkedEntries=['prepaid','sponsors'].flatMap(kind=>{
+    const list=unpackLedgerList({payload:row[kind+'_payload'],version:row[kind+'_version'],updated_at:row[kind+'_updated_at']});
+    return list.entries.map(entry=>({id:'linked:'+kind+':'+entry.id,date:entry.date,
+      description:(kind==='prepaid'?'선납 회비 · ':'찬조 · ')+entry.name,
+      income:entry.amount,expense:0,note:'',sourceKind:kind,sourceId:entry.id}));
+  });
+  return withLinkedEntries(manual,linkedEntries);
+}
+function withLinkedEntries(manual,linkedEntries){
+  // 500 manual + 500 per list, each <= 1e12: even the largest total/running
+  // balance is <= 1501e12, below MAX_SAFE_INTEGER, in any display sort order.
+  let income=0,expense=0;
+  for(const entry of [...manual.entries,...linkedEntries]){income+=entry.income;expense+=entry.expense;}
+  if(![income,expense,manual.openingBalance+income,manual.openingBalance-expense].every(Number.isSafeInteger))throw new Error('Unsafe ledger totals');
+  return {...manual,linkedEntries};
+}
 async function readInput(request){
   if(Number(request.headers.get('content-length'))>MAX_BYTES)return {error:json({error:'입력 내용은 512 KiB 이하여야 합니다.'},413)};
   // Count streamed bytes before decoding, including chunked requests with no
@@ -59,19 +87,24 @@ export async function ledger(request,env){
   if(request.method==='PUT'&&!(env.EDITOR_KEY&&request.headers.get('x-kokkiri-editor')===env.EDITOR_KEY))return json({error:'회계장부는 운영진만 수정할 수 있습니다.'},403);
   if(!env.DB)return unavailable();
   try{
-    if(request.method==='GET')return json({data:unpack(await env.DB.prepare('SELECT payload,version,updated_at FROM ledger_state WHERE id=1').first())});
+    if(request.method==='GET')return json({data:await readLedger(env.DB)});
     const parsed=await readInput(request);if(parsed.error)return parsed.error;
     const input=parsed.data;
     if(!exactKeys(input,['version','operation','openingBalance','entries'])||!Number.isSafeInteger(input.version)||input.version<0||input.version>=Number.MAX_SAFE_INTEGER||typeof input.operation!=='string'||!uuid.test(input.operation)||!validLedger(input))return json({error:'장부의 날짜·금액·항목과 저장 버전을 확인해주세요.'},400);
     const operation=input.operation.toLowerCase(),payload=payloadOf(input);
     const requestPayload=JSON.stringify({version:input.version,...payload});
     const previousOperation=()=>env.DB.prepare('SELECT request_payload,new_snapshot FROM ledger_revisions WHERE operation=?').bind(operation).first();
-    const replay=row=>row.request_payload===requestPayload?json({data:JSON.parse(row.new_snapshot)}):conflict();
-    const prior=await previousOperation();if(prior)return replay(prior);
-    const current=unpack(await env.DB.prepare('SELECT payload,version,updated_at FROM ledger_state WHERE id=1').first());
+    // Receipts/audit/request identity remain MANUAL ONLY. Every successful PUT,
+    // including a late retry, attaches currently read sources without replaying
+    // old list data or persisting derived entries. ':' in linked IDs is rejected
+    // by validLedger, so copying the rendered rows back into PUT fails with 400.
+    const receipt=async manual=>json({data:withLinkedEntries(manual,(await readLedger(env.DB)).linkedEntries)});
+    const replay=async row=>row.request_payload===requestPayload?await receipt(JSON.parse(row.new_snapshot)):conflict();
+    const prior=await previousOperation();if(prior)return await replay(prior);
+    const current=await readLedger(env.DB);
     if(current.version!==input.version){
       // Another copy can commit after the operation lookup and before this read.
-      const raced=await previousOperation();return raced?replay(raced):conflict();
+      const raced=await previousOperation();return raced?await replay(raced):conflict();
     }
     const at=new Date().toISOString(),next={...payload,version:input.version+1,updatedAt:at};
     // D1 batch is a transaction. Both statements use the SAME version predicate;
@@ -88,7 +121,7 @@ export async function ledger(request,env){
         WHERE id=1 AND version=? AND EXISTS(SELECT 1 FROM ledger_revisions WHERE operation=? AND version=? AND request_payload=?)`)
         .bind(JSON.stringify(payload),at,input.version,operation,next.version,requestPayload)
     ]);
-    if(result[0]?.meta?.changes===1&&result[1]?.meta?.changes===1)return json({data:next});
-    const raced=await previousOperation();return raced?replay(raced):conflict();
+    if(result[0]?.meta?.changes===1&&result[1]?.meta?.changes===1)return await receipt(next);
+    const raced=await previousOperation();return raced?await replay(raced):conflict();
   }catch{return unavailable();}
 }

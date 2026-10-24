@@ -211,7 +211,7 @@ export async function runLedgerListChecks(options){
     const beforeMigration=snapshot(db);db.exec(migration);assert.equal(snapshot(db),beforeMigration,'migration replay preserves lists/audit');
     const emptied=await success(await call(write(current.version)));assert.deepEqual(emptied.entries,[]);assert.deepEqual(JSON.parse(revisions('prepaid').at(-1).previous_snapshot),current);
     assert.deepEqual(await success(await sponsor()),sponsorCurrent);
-    assert.equal(unrelated(),untouched,'lists never change accounting, seed scores, people, notices or games');
+    assert.equal(unrelated(),untouched,'lists never write manual accounting storage, seed scores, people, notices or games');
     await authenticationChecks(worker);await unavailableChecks();
   }finally{if(owned)db.close();}
   console.log('PASS: rendered public list factory/CSS, ledger lists member/operator permissions, list isolation, strict validation/256KiB/500 rows, D1 row bounds, durable retries, CAS races, full audit and atomic rollback; existing accounting/seed/notice data unchanged.');

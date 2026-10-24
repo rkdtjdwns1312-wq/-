@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { ledger } from './dist/server/ledger.js';
 import { memberAccessEndpoint } from './dist/server/member-access.js';
 import rawWorker from './dist/server/index.js';
+import { runLedgerLinkedChecks } from './check-ledger-linked.mjs';
 
 const migration=readFileSync(new URL('./drizzle/0017_ledger.sql',import.meta.url),'utf8');
 const localWorker={fetch:ledger};
@@ -15,7 +16,7 @@ function fixture(migrate=true){
     async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},
     execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}
   };},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
-  if(migrate)db.exec(migration);
+  if(migrate){db.exec(migration);db.exec(readFileSync(new URL('./drizzle/0019_ledger_lists.sql',import.meta.url),'utf8'));}
   // The editor fixture is generated at runtime; no production credentials exist here.
   return {db,env:{DB,EDITOR_KEY:crypto.randomUUID()},origin:'https://ledger.test',worker:rawWorker};
 }
@@ -28,7 +29,13 @@ function caller(worker,env,origin){
 const entry=(id='row-1',extra={})=>({id,date:'2026-10-25',description:'회비',income:10000,expense:0,note:'',...extra});
 const write=(version,extra={})=>({version,operation:crypto.randomUUID(),openingBalance:0,entries:[],...extra});
 const snapshot=db=>JSON.stringify([db.prepare('SELECT * FROM ledger_state ORDER BY id').all(),db.prepare('SELECT * FROM ledger_revisions ORDER BY version').all()]);
-async function success(response){const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));assert.deepEqual(Object.keys(body),['data']);assert.equal(response.headers.get('cache-control'),'no-store');assert.deepEqual(Object.keys(body.data).sort(),['openingBalance','entries','version','updatedAt'].sort());return body.data;}
+async function success(response){
+  const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));assert.deepEqual(Object.keys(body),['data']);assert.equal(response.headers.get('cache-control'),'no-store');
+  assert.deepEqual(Object.keys(body.data).sort(),['openingBalance','entries','version','updatedAt','linkedEntries'].sort());
+  // This suite checks the original manual-only audit/receipt contract with empty
+  // source lists; the linked suite below tests live sources and combined totals.
+  const {linkedEntries,...manual}=body.data;assert.deepEqual(linkedEntries,[]);return manual;
+}
 
 async function authenticationChecks(integratedWorker){
   const {db,env,origin}=fixture();
@@ -163,10 +170,10 @@ export async function runLedgerChecks(options){
     const delayed=write(current.version,{openingBalance:750});let originalReceipt,delayedSnapshot;
     const delayedDB={...env.DB,prepare(sql){
       const statement=env.DB.prepare(sql);
-      if(sql==='SELECT payload,version,updated_at FROM ledger_state WHERE id=1'){
+      if(sql.includes('FROM ledger_state m')){
         const first=statement.first;
         statement.first=async()=>{
-          originalReceipt=await success(await call(delayed));delayedSnapshot=snapshot(db);
+          if(!originalReceipt){originalReceipt=await success(await call(delayed));delayedSnapshot=snapshot(db);}
           return first();
         };
       }
@@ -193,6 +200,7 @@ export async function runLedgerChecks(options){
     assert.equal(unrelated(),untouched,'ledger never changes scores, settlements, roster or boards');
     await authenticationChecks(worker);
     await unavailableChecks();
+    await runLedgerLinkedChecks();
   }finally{if(owned)db.close();}
   console.log('PASS: ledger member/operator permissions, strict input/512KiB limit, 500 rows/5000-char multiline notes, signed balance, full snapshots, durable retries, concurrent CAS and atomic failure rollback.');
 }
@@ -203,7 +211,7 @@ async function unavailableChecks(){
     const schema=()=>JSON.stringify(db.prepare("SELECT name,sql FROM sqlite_master ORDER BY name").all());
     const before=schema();
     assert.equal((await call()).status,503);assert.equal((await call(write(0))).status,503);assert.equal(schema(),before,'no runtime schema fallback');
-    db.exec(migration);db.exec('DELETE FROM ledger_state');
+    db.exec(migration);db.exec(readFileSync(new URL('./drizzle/0019_ledger_lists.sql',import.meta.url),'utf8'));db.exec('DELETE FROM ledger_state');
     assert.equal((await call()).status,503);assert.equal((await call(write(0))).status,503);assert.equal(db.prepare('SELECT count(*) AS n FROM ledger_state').get().n,0,'no runtime singleton fallback');
     db.exec(migration);db.exec('DROP TABLE ledger_revisions');
     const state=db.prepare('SELECT * FROM ledger_state').get();
