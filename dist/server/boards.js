@@ -18,6 +18,9 @@ import { createScoreHistory } from './score-history-client.js';
 import { scoreHistoryCss } from './score-history-style.js';
 import { attendanceCorrection } from './attendance-correction.js';
 import { attendancePolicy } from './attendance-policy.js';
+import { ledger } from './ledger.js';
+import { createLedgerView } from './ledger-client.js';
+import { ledgerCss } from './ledger-style.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -220,21 +223,63 @@ async function unsettleSchedule(db,id,input={}){
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
 }
+// Keep every D1 value AND row comfortably below its 2,000,000-byte limit.
+// Small/old backups retain their original inline JSON representation.
+const backupChunkBytes=512*1024,backupChunkFormat='kokkiri-backup-chunks-v1';
+const backupEncoder=new TextEncoder();
+async function backupDigest(bytes){
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function backupStorage(data){
+  const bytes=backupEncoder.encode(data);
+  if(bytes.length<=backupChunkBytes)return {data,chunks:[]};
+  const chunks=[],decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
+  for(let start=0;start<bytes.length;){
+    let end=Math.min(start+backupChunkBytes,bytes.length);
+    // Never split a Korean character/emoji across two TEXT values.
+    while(end<bytes.length&&(bytes[end]&0xc0)===0x80)end--;
+    chunks.push(decoder.decode(bytes.subarray(start,end)));start=end;
+  }
+  return {data:JSON.stringify({format:backupChunkFormat,chunks:chunks.length,bytes:bytes.length,sha256:await backupDigest(bytes)}),chunks};
+}
+async function readBackup(env,id){
+  // Read the manifest and chunks in one transaction so retention cleanup cannot
+  // delete a backup between those reads and cause a partial download.
+  const result=await env.DB.batch([
+    env.DB.prepare('SELECT data FROM backups WHERE id=?').bind(id),
+    env.DB.prepare('SELECT chunk_index,data FROM backup_chunks WHERE backup_id=? ORDER BY chunk_index').bind(id)
+  ]);
+  const row=result[0].results[0];if(!row)return null;
+  const manifest=JSON.parse(row.data);
+  if(manifest?.format!==backupChunkFormat)return row.data;
+  const chunks=result[1].results;
+  if(!Number.isSafeInteger(manifest.chunks)||manifest.chunks<1||!Number.isSafeInteger(manifest.bytes)||manifest.bytes<1||typeof manifest.sha256!=='string'||!/^[a-f0-9]{64}$/.test(manifest.sha256)||chunks.length!==manifest.chunks||chunks.some((chunk,index)=>chunk.chunk_index!==index||typeof chunk.data!=='string'))throw Error('Incomplete backup');
+  const data=chunks.map(chunk=>chunk.data).join(''),bytes=backupEncoder.encode(data);
+  if(bytes.length!==manifest.bytes||await backupDigest(bytes)!==manifest.sha256)throw Error('Invalid backup checksum');
+  return data;
+}
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
   // One read transaction prevents a backup mixing pre-/post-settlement tables.
-  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history'];
-  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory});
-  const id='bk-'+at.replace(/[:.]/g,'-')+'-'+Math.random().toString(36).slice(2,6);
-  await env.DB.prepare('INSERT INTO backups (id,created_at,kind,data) VALUES (?,?,?,?)').bind(id,at,kind,data).run();
-  await env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(new Date(Date.now()-31*86400000).toISOString()).run();
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions});
+  const id='bk-'+crypto.randomUUID(),stored=await backupStorage(data);
+  const expired=new Date(Date.now()-31*86400000).toISOString();
+  // Publishing the manifest, all chunks and retention cleanup is all-or-nothing.
+  // Explicit child cleanup also supports SQLite test adapters without FK enforcement.
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO backups (id,created_at,kind,data) VALUES (?,?,?,?)').bind(id,at,kind,stored.data),
+    ...stored.chunks.map((chunk,index)=>env.DB.prepare('INSERT INTO backup_chunks(backup_id,chunk_index,data) VALUES(?,?,?)').bind(id,index,chunk)),
+    env.DB.prepare('DELETE FROM backup_chunks WHERE backup_id IN (SELECT id FROM backups WHERE created_at<?)').bind(expired),
+    env.DB.prepare('DELETE FROM backups WHERE created_at<?').bind(expired)
+  ]);
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin,member){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -245,6 +290,7 @@ export default {async fetch(request,env){
   if(['/api/member-login','/api/member-logout','/api/member-session','/api/member-access/config'].includes(path))return memberAccessEndpoint(request,env);
   // Protect live dispatch as well as the archived schedule/ranking API below.
   if(path==='/api/live-courts')return await requireMember(request,env)||liveCourts(request,env);
+  if(path==='/api/ledger')return ledger(request,env);
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path.startsWith('/api/')){
@@ -393,7 +439,7 @@ export default {async fetch(request,env){
       // 요청 074: 관리자 — 백업 목록/생성/다운로드.
       if(path==='/api/backups'&&request.method==='GET'){
         if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 볼 수 있습니다.'},403);
-        const {results}=await env.DB.prepare('SELECT id,created_at,kind,length(data) AS size FROM backups ORDER BY created_at DESC LIMIT 60').all();
+        const {results}=await env.DB.prepare("SELECT id,created_at,kind,CASE WHEN json_extract(data,'$.format')=? THEN json_extract(data,'$.bytes') ELSE length(CAST(data AS BLOB)) END AS size FROM backups ORDER BY created_at DESC LIMIT 60").bind(backupChunkFormat).all();
         return json({items:results});
       }
       if(path==='/api/backups'&&request.method==='POST'){
@@ -403,9 +449,9 @@ export default {async fetch(request,env){
       const bmatch=path.match(/^\/api\/backups\/([A-Za-z0-9-]{1,120})$/);
       if(bmatch&&request.method==='GET'){
         if(!adminKey||request.headers.get('x-kokkiri-admin')!==adminKey)return json({error:'홈페이지 관리자만 받을 수 있습니다.'},403);
-        const row=await env.DB.prepare('SELECT data FROM backups WHERE id=?').bind(bmatch[1]).first();
-        if(!row)return json({error:'백업을 찾을 수 없습니다.'},404);
-        return new Response(row.data,{status:200,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','content-disposition':'attachment; filename="'+bmatch[1]+'.json"'}});
+        const data=await readBackup(env,bmatch[1]);
+        if(data===null)return json({error:'백업을 찾을 수 없습니다.'},404);
+        return new Response(data,{status:200,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','content-disposition':'attachment; filename="'+bmatch[1]+'.json"'}});
       }
       if(path==='/api/mvp'&&request.method==='GET'){
         const last=await env.DB.prepare('SELECT schedule_id,settled_at FROM ranking_settlements ORDER BY settled_at DESC,rowid DESC LIMIT 1').first();

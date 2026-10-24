@@ -31,6 +31,7 @@ function dialogHarness(){
 
 function checkAccessContract(){
   assert.equal(memberOnlyHash('#schedule'),true);assert.equal(memberOnlyHash('#live'),true);assert.equal(memberOnlyHash('#seed'),true);
+  assert.equal(memberOnlyHash('#ledger'),true);
   assert.equal(memberOnlyHash('#notice'),false);assert.equal(memberOnlyHash('#post/notice'),false);
   const member=createMemberAccess('',false);assert.equal(member.allowed(),false);member.update(true);assert.equal(member.allowed(),true);member.revoke();assert.equal(member.allowed(),false);
   const editor=createMemberAccess('editor-key',false);assert.equal(editor.allowed(),true);editor.revoke();assert.equal(editor.allowed(),true,'EDITOR always implies member access');
@@ -43,6 +44,7 @@ async function checkPublicHomeMvp(){
   const app={innerHTML:''},mvp={innerHTML:''};let calls=0;
   const home=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>false},api:async()=>{calls++;throw Error('public home must not request MVP');},esc});
   await home();assert.equal(calls,0,'public home does not fetch or display MVP data');assert.match(app.innerHTML,/href="#notice"/,'public home retains the notice route');
+  assert.match(app.innerHTML,/class="home-ledger-button" href="#ledger"/,'home includes compact ledger link');
   const signedIn=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>true},api:async()=>({mvp:['회원'],id:'schedule-1',settledAt:new Date().toISOString()}),esc});
   await signedIn();assert.match(mvp.innerHTML,/이번 정모 MVP/,'member home fetches and displays MVP data');
 }

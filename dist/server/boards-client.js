@@ -1,4 +1,4 @@
-export function memberOnlyHash(hash){return hash==='#schedule'||hash==='#live'||hash==='#seed';}
+export function memberOnlyHash(hash){return hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';}
 
 export function createMemberAccess(EDITOR,initialMember=false){
   let member=Boolean(EDITOR||initialMember);
@@ -12,9 +12,9 @@ export function createMemberAccess(EDITOR,initialMember=false){
 
 export function memberMenuLabel(member){return member?'회원 로그아웃':'회원권한';}
 
-export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory){
+export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory,createLedgerView){
   const scheduleTools=createScheduleTools();
-  const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed';
+  const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';
   const memberMenuLabel=member=>member?'회원 로그아웃':'회원권한';
   const memberAccess=(()=>{let member=Boolean(EDITOR||MEMBER);return {allowed:()=>Boolean(EDITOR||member),member:()=>member,update:value=>{member=Boolean(EDITOR||value);return member;},revoke:()=>{if(!EDITOR)member=false;return member;}};})();
   let refreshMemberMenu=()=>{},memberDialogOwner=0;
@@ -156,6 +156,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   function gateProtectedRoute(hash){pendingMemberTarget=hash;activeMemberContent=false;detailRead++;stopPoll();showMemberGate();}
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
+  const ledgerView=typeof createLedgerView==='function'?createLedgerView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#ledger',setDirty:value=>{dirty=value;},setSaving:value=>{saving=value;}}):null;
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){
     const authEpoch=memberAuthEpoch,requestRoute=routeToken,requestHash=location.hash;
@@ -189,7 +190,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   async function getPeople(force=false){if(force||!people.length){const request=++peopleRead,next=(await api('/api/people')).people;if(!Array.isArray(next))throw Error('최신 명단을 확인하지 못했습니다. 다시 시도해주세요.');if(request===peopleRead){people=next;syncOperators(people);}return next;}return people;}
   function nameOf(p){return people.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;}
   const crumb=kind=>'<a class="crumb'+(kind?'':' home-return')+'" href="'+(kind?'#'+kind:'#home')+'">'+(kind?'← '+(kind==='schedule'?'대진표 목록':kind==='notice'?'공지사항 목록':'홈으로'):'홈으로 가기')+'</a>';
-  async function home(){if(typeof activeMemberContent!=='undefined')activeMemberContent=false;const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);if(!memberAccess.allowed())return;try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
+  async function home(){if(typeof activeMemberContent!=='undefined')activeMemberContent=false;const token=routeToken;app.innerHTML='<section class="home-intro"><img src="/mascot-play.png" alt="배드민턴을 치는 콕끼리" width="175" height="175"></section><nav class="menus" aria-label="게시판"><a class="menu" href="#notice"><span class="menu-title">공지사항</span><small>함께 알아둘 모임 소식</small></a><a class="menu" href="#schedule"><span class="menu-title">대진표</span><small>날짜별 대진과 지난 게임</small></a><a class="menu" href="#live"><span class="menu-title">실시간대진</span><small>오늘의 자유대진</small></a><a class="menu" href="#seed"><span class="menu-title">시드현황</span><small>회원 · 게스트 시드 확인</small></a></nav><div class="home-ledger-actions"><a class="home-ledger-button" href="#ledger">회계장부</a></div>'+(EDITOR?'<div class="home-note"><span>새로운 게임을 준비하시나요?</span><button class="primary" id="homeNew">+ 대진 만들기</button></div>':'')+'<div id="mvpHome"></div>';if(EDITOR)$('homeNew').onclick=()=>openPicker(null);if(!memberAccess.allowed())return;try{const m=await api('/api/mvp');if(token!==routeToken)return;if(m&&Array.isArray(m.mvp)&&m.mvp.length&&m.settledAt&&(Date.now()-new Date(m.settledAt).getTime())/86400000<=5){const el=$('mvpHome');if(el)el.innerHTML='<a class="mvp-home" href="#post/'+encodeURIComponent(m.id)+'"><span class="mvp-home-cap">🥇 이번 정모 MVP</span><span class="mvp-title">'+esc(m.mvp.join(' '))+'</span></a>';}}catch(e){}}
   async function board(kind,token){
     if(typeof activeMemberContent!=='undefined')activeMemberContent=kind==='schedule';
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
@@ -637,9 +638,9 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   async function route(){
     const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;if(typeof activeMemberContent!=='undefined')activeMemberContent=false;stopPoll();
-    if(['#schedule','#live','#seed'].includes(hash)&&typeof memberAccess!=='undefined'&&!memberAccess.allowed()){gateProtectedRoute(hash);return;}
+    if(['#schedule','#live','#seed','#ledger'].includes(hash)&&typeof memberAccess!=='undefined'&&!memberAccess.allowed()){gateProtectedRoute(hash);return;}
     app.innerHTML='<p class="empty">불러오는 중…</p>';
-    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(e.memberOnly)return;if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
+    try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#ledger'&&ledgerView)await ledgerView.open(token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(e.memberOnly)return;if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }
   function handleHashChange(){if(memberLoginPending||saving){history.replaceState(null,'',lastHash);return;}if(dirty&&!confirm('저장하지 않은 변경 내용이 있습니다. 이동할까요?')){history.replaceState(null,'',lastHash);return;}dirty=false;dialog.close();route();window.scrollTo(0,0);}
   window.addEventListener('hashchange',handleHashChange);
