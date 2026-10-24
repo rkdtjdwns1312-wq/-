@@ -44,7 +44,12 @@ async function checkPublicHomeMvp(){
   const app={innerHTML:''},mvp={innerHTML:''};let calls=0;
   const home=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>false},api:async()=>{calls++;throw Error('public home must not request MVP');},esc});
   await home();assert.equal(calls,0,'public home does not fetch or display MVP data');assert.match(app.innerHTML,/href="#notice"/,'public home retains the notice route');
+  assert.match(app.innerHTML,/href="#schedule"/,'home retains the schedule menu');assert.match(app.innerHTML,/href="#live"/,'home retains live matches');assert.match(app.innerHTML,/href="#seed"/,'home retains seed status');
   assert.match(app.innerHTML,/class="home-ledger-button" href="#ledger"/,'home includes compact ledger link');
+  assert.doesNotMatch(app.innerHTML,/새로운 게임을 준비하시나요\?|\+ 대진 만들기|id="homeNew"/,'home removes the create-match prompt and button');
+  let pickerCalls=0;const operatorHome=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'editor-key',openPicker(){pickerCalls++;},memberAccess:{allowed:()=>false},api:async()=>({}),esc});
+  await operatorHome();assert.doesNotMatch(app.innerHTML,/새로운 게임을 준비하시나요\?|\+ 대진 만들기|id="homeNew"/,'operator home also omits the create-match prompt and button');assert.equal(pickerCalls,0,'home no longer invokes the create-match picker');
+  const scheduleBoard=actual('board');assert.match(scheduleBoard,/id="newPost"/,'schedule list retains its create button');assert.match(scheduleBoard,/kind==='schedule'\?'대진 만들기'/,'schedule list keeps its create-match label');assert.match(scheduleBoard,/\$\('newPost'\)\.onclick=\(\)=>kind==='schedule'\?openPicker\(null\)/,'schedule list still opens the create-match picker');
   const signedIn=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>true},api:async()=>({mvp:['회원'],id:'schedule-1',settledAt:new Date().toISOString()}),esc});
   await signedIn();assert.match(mvp.innerHTML,/이번 정모 MVP/,'member home fetches and displays MVP data');
 }
