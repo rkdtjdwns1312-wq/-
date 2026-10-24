@@ -26,8 +26,9 @@ function actual(name){
   }
   throw Error('unterminated '+name);
 }
-function compile(name,scope){return new Function(...Object.keys(scope),actual(name)+'\nreturn '+name+';')(...Object.values(scope));}
-function compilePicker(scope){return new Function(...Object.keys(scope),'let routeToken=1;'+actual('openPicker')+'\nreturn {openPicker,navigate(){routeToken++;}};')(...Object.values(scope));}
+const scheduleInfoStub=()=>({read:()=>({title:'10월 25일(일) 테스트 18:00'})});
+function compile(name,scope){scope={createScheduleInfo:scheduleInfoStub,...scope};return new Function(...Object.keys(scope),actual(name)+'\nreturn '+name+';')(...Object.values(scope));}
+function compilePicker(scope){scope={createScheduleInfo:scheduleInfoStub,...scope};return new Function(...Object.keys(scope),'let routeToken=1;'+actual('openPicker')+'\nreturn {openPicker,navigate(){routeToken++;}};')(...Object.values(scope));}
 
 function dialogHarness(){
   let children=[];
@@ -82,9 +83,9 @@ async function checkEncodedNoticeNavigation(){
 }
 
 async function checkBoardListArrows(){
-  const makeElement=()=>({innerHTML:'',hidden:false,disabled:false,textContent:'',onclick:null,insertAdjacentHTML(position,html){assert.equal(position,'beforeend');this.innerHTML+=html;}});
+  const makeElement=()=>({innerHTML:'',hidden:false,disabled:false,textContent:'',onclick:null,setAttribute(){},insertAdjacentHTML(position,html){assert.equal(position,'beforeend');this.innerHTML+=html;}});
   const makeHarness=items=>{
-    const elements=new Map(),app={innerHTML:'',set innerHTML(value){this._innerHTML=String(value);for(const id of ['newPost','postList','more'])elements.set(id,elements.get(id)||makeElement());},get innerHTML(){return this._innerHTML;}};
+    const elements=new Map(),app={innerHTML:'',set innerHTML(value){this._innerHTML=String(value);for(const id of ['newPost','boardTitleEdit','postList','more'])elements.set(id,elements.get(id)||makeElement());},get innerHTML(){return this._innerHTML;}};
     const $=id=>elements.get(id)||null;
     return {app,$,api:async path=>({items,hasMore:false}),crumb:()=>'',elements};
   };
@@ -96,7 +97,11 @@ async function checkBoardListArrows(){
     assert.match(html,new RegExp('href="#post/'+encodeURIComponent('공지 1')+'"'),'board list must preserve encoded notice links');
     assert.match(html,/href="#post\/schedule-1"/,'board list must preserve schedule links');
     assert.doesNotMatch(html,/<span aria-hidden="true">→<\/span>/,kind+' list items must not render right arrows');
-    if(kind==='schedule'){assert.match(html,/미반영마감/,'an unscored closed schedule must be labeled distinctly in the list');assert.match(html,/출석만 반영/,'an attendance-only closure must be labeled distinctly in the list');}
+    if(kind==='schedule'){
+      assert.match(html,/미반영마감/,'an unscored closed schedule must be labeled distinctly in the list');assert.match(html,/출석만 반영/,'an attendance-only closure must be labeled distinctly in the list');
+      assert.ok(h.app.innerHTML.indexOf('id="boardTitleEdit"')<h.app.innerHTML.indexOf('id="newPost"'),'title edit precedes create');
+      assert.doesNotMatch(html,/data-title-edit/);h.$('boardTitleEdit').onclick();assert.match(h.$('postList').innerHTML,/data-title-edit="schedule-unscored"/,'closed schedules can rename');h.$('boardTitleEdit').onclick();assert.doesNotMatch(h.$('postList').innerHTML,/data-title-edit/);
+    }
   }
   assert.match(source,/home-return/,'board home link must use the home-return style');
   assert.match(source,/'홈으로 가기'/,'board home link must say 홈으로 가기');
@@ -481,6 +486,8 @@ async function checkHistoryAndPeopleWrites(){
 }
 
 export async function runClientAuditChecks(){
+  await checkNewScheduleTitle();
+  await checkScheduleTitleDialog();
   await checkLoginCancellation();
   await checkEncodedNoticeNavigation();
   await checkBoardListArrows();
@@ -502,6 +509,34 @@ export async function runClientAuditChecks(){
   assert.match(styleSource,/\.settle-unscored\{[^}]*background:#e87361/,'unscored button must use the requested coral color');
   assert.match(source,/if\(\$\('endMatch'\)\)\$\('endMatch'\)\.onclick=\(\)=>endMatch\(d,token,allScoredDone\)/,'every open schedule must route its close button through the result-completeness guard');
   console.log('PASS: actual client factories cover notice navigation, four-choice confirmation lifecycle, canceled login, local picker state, scored/attendance-only/unscored settlement modes, and people dialogs.');
+}
+
+async function checkNewScheduleTitle(){
+  const people=Array.from({length:4},(_,i)=>({id:'t'+i,name:'회원'+i,type:'member',points:50,seed:'D'}));
+  for(const scenario of ['valid','invalid','changed']){
+    const h=dialogHarness(),made=[],read=deferred();let title='10월 25일(일) 중앙체육관 18:00',calls=0;
+    const picker=compilePicker({EDITOR:'op',dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,getPeople:async()=>++calls===1?people:read.promise,message(){},createScheduleInfo:()=>({read(){if(scenario==='invalid')throw Error('날짜를 선택해주세요.');return {title};}}),OPERATORS:new Set(),crypto,confirm:()=>true,alert(){},window:{scrollTo(){}},editSchedule:d=>made.push(d),scheduleTools:{generate:()=>[]},dirty:false,stamp:()=>''});
+    await picker.openPicker(null);assert.match(h.dialog.innerHTML,/id="scheduleInfo"/);assert.doesNotMatch(h.dialog.innerHTML,/id="newTitle"/);
+    h.$('selectAll').onclick();const work=h.$('generate').onclick();
+    if(scenario==='invalid'){await work;assert.equal(calls,1);assert.match(h.$('pickerError').textContent,/날짜/);continue;}
+    if(scenario==='changed')title='10월 26일(월) 다른장소 19:00';read.resolve(people);await work;
+    if(scenario==='valid')assert.equal(made[0].title,'10월 25일(일) 중앙체육관 18:00');else{assert.equal(made.length,0);assert.match(h.$('pickerError').textContent,/바뀌었습니다/);}
+  }
+}
+async function checkScheduleTitleDialog(){
+  for(const scenario of ['success','retry','conflict','cancel','empty']){
+    const h=dialogHarness(),calls=[],saved=[],post={id:'공백 대진',title:'기존 <대진>',version:5,settledAt:'2026-10-24'};let fail=scenario==='retry';
+    const rename=compile('renameScheduleTitle',{EDITOR:'op',routeToken:1,saving:false,dirty:false,dialog:h.dialog,$:h.$,esc,crypto,message(){},api:async(path,options)=>{const body=JSON.parse(options.body);calls.push({path,body});if(fail){fail=false;throw Error('network');}if(scenario==='conflict'){const error=Error('conflict');error.status=409;throw error;}return {data:{title:body.title,version:6}};}});
+    rename(post,1,data=>saved.push(data));assert.match(h.dialog.innerHTML,/기존 &lt;대진&gt;/);
+    if(scenario==='cancel'){h.$('cancelScheduleTitle').onclick();assert.equal(h.dialog.open,false);assert.equal(calls.length,0);continue;}
+    h.$('scheduleTitleInput').value=scenario==='empty'?' ':'새 제목';h.$('scheduleTitleInput').oninput();
+    await h.$('scheduleTitleForm').onsubmit({preventDefault(){}});
+    if(scenario==='empty'){assert.equal(calls.length,0);assert.match(h.$('scheduleTitleError').textContent,/1~120/);continue;}
+    assert.equal(calls[0].path,'/api/posts/'+encodeURIComponent(post.id)+'/title');assert.deepEqual(Object.keys(calls[0].body).sort(),['operation','title','version']);
+    if(scenario==='conflict'){assert.equal(saved.length,0);assert.equal(h.$('scheduleTitleInput').value,'새 제목');assert.match(h.$('scheduleTitleError').textContent,/새로고침/);continue;}
+    if(scenario==='retry'){assert.equal(saved.length,0);assert.equal(h.$('scheduleTitleInput').value,'새 제목');await h.$('scheduleTitleForm').onsubmit({preventDefault(){}});assert.deepEqual(calls[1].body,calls[0].body,'retry keeps operation');}
+    assert.deepEqual(saved,[{title:'새 제목',version:6}]);assert.equal(h.dialog.open,false);assert.equal(post.title,'기존 <대진>','callback, not direct mutation, updates the list');
+  }
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){await runClientAuditChecks();await runProgressUIChecks();await runLiveUIChecks();}

@@ -32,6 +32,8 @@ import { runLedgerListChecks } from './check-ledger-lists.mjs';
 import { runLedgerListsUIChecks } from './check-ledger-lists-ui.mjs';
 import { runExcellentMemberChecks } from './check-excellent-members.mjs';
 import { runHiddenNameChecks } from './check-hidden-name.mjs';
+import { runScheduleInfoUIChecks } from './check-schedule-info-ui.mjs';
+import { runScheduleTitleChecks } from './check-schedule-title.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -287,6 +289,8 @@ await runLedgerListChecks();
 await runLedgerListsUIChecks();
 await runExcellentMemberChecks();
 await runHiddenNameChecks();
+await runScheduleInfoUIChecks();
+await runScheduleTitleChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   if(process.env.KOKKIRI_HISTORY_FIXTURE==='1'){

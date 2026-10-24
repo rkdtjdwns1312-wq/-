@@ -12,6 +12,7 @@ import { createLiveView } from './live-client.js';
 import { liveCss } from './live-style.js';
 import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-write.js';
 import { substituteSchedule,legacyNamesAreUnambiguous } from './schedule-substitution.js';
+import { scheduleTitle } from './schedule-title.js';
 import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-access.js';
 import { scoreHistory } from './score-history.js';
 import { createScoreHistory } from './score-history-client.js';
@@ -24,6 +25,8 @@ import { ledgerCss } from './ledger-style.js';
 import { ledgerLists } from './ledger-lists.js';
 import { createLedgerLists } from './ledger-lists-client.js';
 import { ledgerListsCss } from './ledger-lists-style.js';
+import { createScheduleInfo } from './schedule-info-client.js';
+import { scheduleInfoCss } from './schedule-info-style.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -215,15 +218,23 @@ async function unsettleSchedule(db,id,input={}){
   const at=new Date().toISOString();
   const nextPayload={...post,settledAt:null,mvp:[],title:post.preTitle||post.title};delete nextPayload.preTitle;delete nextPayload.settlementMode;
   const statements=[
+    // Title-only edits do not change the roster revision. Claim the archived
+    // post version inside this SAME transaction before deleting any events.
+    // NOT NULL aborts the entire undo, including commitRoster's revision claim.
+    db.prepare("UPDATE roster_write_revision SET revision=CASE WHEN EXISTS (SELECT 1 FROM board_posts WHERE id=? AND kind='schedule' AND version=?) THEN revision ELSE NULL END WHERE id=1").bind(id,row.version),
     db.prepare('DELETE FROM ranking_events WHERE schedule_id=?').bind(id),
     db.prepare('DELETE FROM guest_events WHERE schedule_id=?').bind(id),
     db.prepare('DELETE FROM ranking_settlements WHERE schedule_id=?').bind(id),
-    db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation='unsettle',updated_at=? WHERE id=? AND kind='schedule'").bind(JSON.stringify(nextPayload),at,id)
+    db.prepare("UPDATE board_posts SET payload=?,version=version+1,last_operation='unsettle',updated_at=? WHERE id=? AND kind='schedule' AND version=?").bind(JSON.stringify(nextPayload),at,id,row.version)
   ];
   statements.push(updateRows(db,'ranking_members','member_id',nextRows.map(next=>({...next,seed:seedForPoints(next.points),previous_rank:next.rank,previous_points:next.points,updated_at:at,rank_movement:0,rank_protected:0})),['points','seed','rank','previous_rank','previous_points','attendance','wins','losses','updated_at','rank_movement','rank_protected','floor_protected_at'],['edit_version']));
   statements.push(db.prepare('UPDATE guests SET rank_protected=0,edit_version=edit_version+1 WHERE hidden=0'));
   statements.push(updateRows(db,'guests','guest_id',[...gTouched].map(gid=>{const g=gRev.get(gid);return {...g,previous_points:g.points};}),['points','previous_points','attendance','wins','losses','floor_protected_at']));
-  await commitRoster(db,revision,statements);
+  try{await commitRoster(db,revision,statements);}catch(error){
+    const latest=await db.prepare("SELECT version FROM board_posts WHERE id=? AND kind='schedule'").bind(id).first();
+    if(!latest||latest.version!==row.version)return json({error:'다른 기기에서 대진이 변경되었습니다. 최신 내용을 확인한 뒤 다시 마감을 취소해주세요.',conflict:true},409);
+    throw error;
+  }
   const saved=await db.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   return json({data:unpack(saved)});
 }
@@ -283,7 +294,7 @@ async function createBackup(env,kind){
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin,member){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}${ledgerListsCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()},${createLedgerLists.toString()});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}${ledgerListsCss}${scheduleInfoCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()},${createLedgerLists.toString()},${createScheduleInfo.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -468,6 +479,8 @@ export default {async fetch(request,env){
         const p=JSON.parse(row.payload);
         return json({mvp:Array.isArray(p.mvp)?p.mvp:[],id:last.schedule_id,settledAt:last.settled_at});
       }
+      const titleMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/title$/);
+      if(titleMatch)return await scheduleTitle(request,env,titleMatch[1]);
       const substituteMatch=path.match(/^\/api\/posts\/([a-zA-Z0-9-]{1,80})\/substitute$/);
       if(substituteMatch){
         if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405);
