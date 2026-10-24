@@ -5,6 +5,30 @@ const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
 const conflict=()=>json({error:'다른 기기에서 대진이나 회원 정보가 변경되었습니다. 최신 내용을 확인한 뒤 다시 긴급교체해주세요.',conflict:true},409);
 
+// An explicit ID is authoritative even after rename/hide/promotion. For legacy
+// name-only participants, never credit a new namesake or silently bind an old
+// nickname to another person. Read history only; do not rewrite archived posts.
+export async function legacyNamesAreUnambiguous(db,post){
+  const names=new Set(post.names.filter((name,index)=>!post.participantIds?.[index]));
+  if(!names.size)return true;
+  const roster=(await db.prepare("SELECT 'member' AS type,member_id AS id,name,hidden,promoted_guest_id FROM ranking_members UNION ALL SELECT 'guest',guest_id,name,hidden,NULL FROM guests").all()).results;
+  const promoted=new Map(roster.filter(p=>p.type==='member'&&p.promoted_guest_id).map(p=>[p.promoted_guest_id,p.id]));
+  const identity=(type,id)=>type==='guest'&&promoted.has(id)?'member:'+promoted.get(id):type+':'+id;
+  const known=new Map([...names].map(name=>[name,new Set()])),active=new Map([...names].map(name=>[name,new Set()]));
+  for(const p of roster)if(names.has(p.name)){
+    const key=identity(p.type,p.id);known.get(p.name).add(key);if(p.hidden===0)active.get(p.name).add(key);
+  }
+  const encoded=JSON.stringify([...names]);
+  const history=(await db.prepare('SELECT person_type,person_id,before_name,after_name FROM people_changes WHERE before_name IN (SELECT value FROM json_each(?)) OR after_name IN (SELECT value FROM json_each(?))').bind(encoded,encoded).all()).results;
+  for(const h of history)for(const name of [h.before_name,h.after_name])if(names.has(name))known.get(name).add(identity(h.person_type,h.person_id));
+  for(const name of names){
+    // Truly unknown adhoc labels keep their existing unscored behavior. Known
+    // archived/renamed labels require explicit IDs instead of guessing.
+    if(known.get(name).size>1||(known.get(name).size===1&&active.get(name).size!==1))return false;
+  }
+  return true;
+}
+
 // The caller checks operator authority. Only one slot changes; recorded results
 // and progress stay intact, while settlement resolves the replacement by DB ID.
 export async function substituteSchedule(db,id,input){
@@ -24,6 +48,7 @@ export async function substituteSchedule(db,id,input){
   if(found.length!==1)return json({error:found.length?'같은 이름이 여러 명입니다. 시드현황에서 구별되는 이름으로 정리한 뒤 교체해주세요.':'교체 멤버를 시드현황의 회원·게스트 명단에서 찾지 못했습니다. 먼저 등록한 뒤 정확한 이름을 입력해주세요.'},400);
   const person=found[0],byId=new Map(roster.map(p=>[p.id,p]));
   for(const member of members)if(member.promoted_guest_id)byId.set(member.promoted_guest_id,member);
+  if(!await legacyNamesAreUnambiguous(db,post))return json({error:'옛 대진의 이름이 숨김·이름 변경 기록과 겹쳐 참가자를 확인할 수 없습니다. 참가자 ID를 확인한 뒤 다시 긴급교체해주세요.',conflict:true},409);
   // Legacy ID-less posts used member-name first, then guest-name resolution.
   // Freeze that same mapping, without guessing a real identity for adhoc names.
   const ids=post.names.map((name,index)=>post.participantIds?.[index]||roster.find(p=>p.name===name)?.id||'adhoc-'+crypto.randomUUID());

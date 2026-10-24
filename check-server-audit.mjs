@@ -78,7 +78,11 @@ export async function runServerAuditChecks(){
       assert.equal((await h.call('/api/people','POST',{name:'동시 명단',type:'member',points:50})).status,409);
       assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM guests WHERE name='동시 명단'").get().n,1);assert.equal(h.people().filter(x=>x.name==='동시 명단').length,0);
       const p=h.person();await h.data('/api/people/hide','POST',{ids:[p.member_id]});const other=h.person();
-      assert.equal((await h.call('/api/people/update','POST',{id:other.member_id,type:'member',name:p.name,points:other.points,reason:'숨긴 이름 충돌',expectedVersion:other.edit_version})).status,409);
+      const hidden=h.sqlite.prepare('SELECT * FROM ranking_members WHERE member_id=?').get(p.member_id);
+      assert.equal((await h.call('/api/people/update','POST',{id:other.member_id,type:'member',name:p.name,points:other.points,reason:'숨긴 이름 재사용',expectedVersion:other.edit_version})).status,200);
+      assert.deepEqual(h.sqlite.prepare('SELECT * FROM ranking_members WHERE member_id=?').get(p.member_id),hidden,'name reuse preserves the archived person');
+      const third=h.people().find(row=>row.member_id!==other.member_id);
+      assert.equal((await h.call('/api/people/update','POST',{id:third.member_id,type:'member',name:p.name,points:third.points,reason:'활성 이름 충돌',expectedVersion:third.edit_version})).status,409,'active names remain unique');
     }finally{h.sqlite.close();}
   }
   {

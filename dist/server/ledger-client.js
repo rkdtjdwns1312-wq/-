@@ -1,11 +1,17 @@
 // Serialized into the page: keep this factory self-contained.
-export function createLedgerView({app,api,esc,EDITOR,isCurrent,setDirty,setSaving,message}){
-  let data=null,draft=null,busy=false,pending=null,token=0,readId=0;
+export function createLedgerView({app,api,esc,EDITOR,isCurrent,setDirty,setSaving,message,createLedgerLists}){
+  let data=null,draft=null,busy=false,pending=null,token=0,readId=0,mode='ledger';
   const $=id=>app.querySelector('#'+id);
   const money=value=>Number(value).toLocaleString('ko-KR')+'원';
   const ordered=entries=>entries.map((e,i)=>({...e,index:i})).sort((a,b)=>a.date.localeCompare(b.date)||a.index-b.index);
   const totals=value=>value.entries.reduce((a,e)=>({income:a.income+Number(e.income||0),expense:a.expense+Number(e.expense||0),balance:a.balance+Number(e.income||0)-Number(e.expense||0)}),{income:0,expense:0,balance:Number(value.openingBalance||0)});
-  const current=()=>isCurrent(token);
+  const current=()=>mode==='ledger'&&isCurrent(token);
+  const listsBack=async()=>{const mine=token,request=open(mine),read=readId;try{await request;}catch(e){if(current()&&token===mine&&read===readId&&!e.memberOnly){app.innerHTML='<p class="login-error">'+esc(e.message||'장부를 불러오지 못했습니다.')+'</p><button id="ledgerRetry">다시 시도</button>';$('ledgerRetry').onclick=listsBack;}}};
+  const lists=typeof createLedgerLists==='function'?createLedgerLists({app,api,esc,EDITOR,isCurrent:key=>mode==='list'&&isCurrent(key),setDirty,setSaving,message,onBack:listsBack}):null;
+  async function openList(kind){
+    if(!lists||busy||!current()||draft&&!confirm('장부의 저장하지 않은 편집 내용을 취소하고 명단을 열까요?'))return;
+    readId++;mode='list';draft=null;pending=null;setDirty(false);await lists.open(kind,token);
+  }
   const changed=()=>{pending=null;setDirty(true);};
   function memoButton(e,editing){return e.note||editing?'<button type="button" data-memo="'+esc(e.id)+'" aria-label="'+esc(e.description||'거래')+' '+(e.note?'메모보기':'메모 작성')+'">'+(e.note?'메모보기':'메모 작성')+'</button>':'—';}
   function openMemo(id){
@@ -32,8 +38,9 @@ export function createLedgerView({app,api,esc,EDITOR,isCurrent,setDirty,setSavin
       const input=(field,type,label,max='')=>'<input aria-label="'+(e.index+1)+'행 '+label+'" data-id="'+esc(e.id)+'" data-field="'+field+'" type="'+type+'" '+max+' value="'+esc(e[field])+'">';
       return '<tr>'+['date','description','income','expense'].map((field,i)=>'<td>'+input(field,i===0?'date':i>1?'number':'text',['날짜','항목','수입','지출'][i],i===1?'maxlength="120"':i>1?'min="0" max="1000000000000" step="1" inputmode="numeric"':'required')+'</td>').join('')+'<td data-balance-id="'+esc(e.id)+'">'+money(balance)+'</td><td>'+memoButton(e,true)+'</td><td><button type="button" data-delete="'+esc(e.id)+'" aria-label="'+(e.index+1)+'행 삭제">삭제</button></td></tr>';
     }).join('');
-    app.innerHTML='<a class="crumb home-return" href="#home">홈으로 가기</a><section class="panel ledger"><div class="ledger-heading"><h1>회계장부</h1><div class="ledger-actions">'+(editing?'<button type="button" id="ledgerCancel">취소</button><button type="button" id="ledgerSave" class="primary">저장</button>':(EDITOR?'<button type="button" id="ledgerEdit">편집</button>':'')+'<button type="button" id="ledgerRefresh">새로고침</button>')+'</div></div><p class="muted">회비 수입과 지출을 날짜순으로 확인합니다. 금액 단위: 원</p><div id="ledgerSummary">'+summary(value)+'</div>'+(editing?'<label class="ledger-opening">시작 잔액<input id="ledgerOpening" type="number" step="1" min="-1000000000000" max="1000000000000" value="'+esc(value.openingBalance)+'"></label><p class="muted">한 행에 수입 또는 지출 중 하나만 입력하세요. 날짜순으로 누계가 자동 계산되며, 같은 날짜는 입력 순서를 따릅니다. 삭제도 저장을 눌러야 반영됩니다.</p>':'<p class="muted">'+(EDITOR?'편집 버튼으로 장부를 수정할 수 있습니다.':'회원은 조회만 가능합니다.')+'</p>')+'<p id="ledgerError" class="login-error" role="alert" tabindex="-1"></p><div class="ledger-scroll" tabindex="0" role="region" aria-label="회계장부 표 — 작은 화면에서는 좌우로 이동"><table class="ledger-table"><thead><tr>'+['날짜','항목','수입','지출','누계','메모',...(editing?['관리']:[])].map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+(!value.entries.length?'<p class="empty">아직 등록된 거래가 없습니다.</p>':'')+(editing?'<button type="button" id="ledgerAdd">+ 거래 추가</button>':'')+'<p class="muted">'+(data.updatedAt?'마지막 저장: '+esc(new Date(data.updatedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})):'등록된 장부가 없습니다. 운영진이 시작 잔액과 거래를 입력해주세요.')+'</p><dialog id="ledgerMemo" class="ledger-memo" aria-labelledby="ledgerMemoTitle"></dialog></section>';
+    app.innerHTML='<a class="crumb home-return" href="#home">홈으로 가기</a><section class="panel ledger"><div class="ledger-heading"><h1>회계장부</h1><div class="ledger-actions"><button type="button" id="ledgerPrepaid">선납자명단</button><button type="button" id="ledgerSponsors">찬조명단</button>'+(editing?'<button type="button" id="ledgerCancel">취소</button><button type="button" id="ledgerSave" class="primary">저장</button>':(EDITOR?'<button type="button" id="ledgerEdit">편집</button>':'')+'<button type="button" id="ledgerRefresh">새로고침</button>')+'</div></div><p class="muted">회비 수입과 지출을 날짜순으로 확인합니다. 금액 단위: 원</p><div id="ledgerSummary">'+summary(value)+'</div>'+(editing?'<label class="ledger-opening">시작 잔액<input id="ledgerOpening" type="number" step="1" min="-1000000000000" max="1000000000000" value="'+esc(value.openingBalance)+'"></label><p class="muted">한 행에 수입 또는 지출 중 하나만 입력하세요. 날짜순으로 누계가 자동 계산되며, 같은 날짜는 입력 순서를 따릅니다. 삭제도 저장을 눌러야 반영됩니다.</p>':'<p class="muted">'+(EDITOR?'편집 버튼으로 장부를 수정할 수 있습니다.':'회원은 조회만 가능합니다.')+'</p>')+'<p id="ledgerError" class="login-error" role="alert" tabindex="-1"></p><div class="ledger-scroll" tabindex="0" role="region" aria-label="회계장부 표 — 작은 화면에서는 좌우로 이동"><table class="ledger-table"><thead><tr>'+['날짜','항목','수입','지출','누계','메모',...(editing?['관리']:[])].map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+(!value.entries.length?'<p class="empty">아직 등록된 거래가 없습니다.</p>':'')+(editing?'<button type="button" id="ledgerAdd">+ 거래 추가</button>':'')+'<p class="muted">'+(data.updatedAt?'마지막 저장: '+esc(new Date(data.updatedAt).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})):'등록된 장부가 없습니다. 운영진이 시작 잔액과 거래를 입력해주세요.')+'</p><dialog id="ledgerMemo" class="ledger-memo" aria-labelledby="ledgerMemoTitle"></dialog></section>';
     app.querySelectorAll('[data-memo]').forEach(el=>el.onclick=()=>openMemo(el.dataset.memo));
+    $('ledgerPrepaid').onclick=()=>openList('prepaid');$('ledgerSponsors').onclick=()=>openList('sponsors');
     if(editing){
       $('ledgerCancel').onclick=()=>{if(busy)return;if(!confirm('편집 내용을 취소할까요?'))return;draft=null;pending=null;setDirty(false);render();};
       $('ledgerSave').onclick=save;
@@ -53,9 +60,9 @@ export function createLedgerView({app,api,esc,EDITOR,isCurrent,setDirty,setSavin
     for(const e of ordered(draft.entries)){balance+=Number(e.income||0)-Number(e.expense||0);const cell=Array.from(app.querySelectorAll('[data-balance-id]')).find(el=>el.dataset.balanceId===e.id);if(cell)cell.textContent=money(balance);}
   }
   async function open(nextToken){
-    token=nextToken;draft=null;pending=null;data=null;setDirty(false);
+    mode='ledger';token=nextToken;draft=null;pending=null;data=null;setDirty(false);
     const mine=nextToken,read=++readId;app.innerHTML='<p class="empty">회계장부를 불러오는 중…</p>';
-    const response=await api('/api/ledger');if(!isCurrent(mine)||token!==mine||read!==readId)return;data=response.data;render();
+    const response=await api('/api/ledger');if(!current()||token!==mine||read!==readId)return;data=response.data;render();
   }
   async function save(){
     if(busy||!EDITOR||!draft||!current())return;

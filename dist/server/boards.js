@@ -11,7 +11,7 @@ import { liveCourts } from './live-courts.js';
 import { createLiveView } from './live-client.js';
 import { liveCss } from './live-style.js';
 import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-write.js';
-import { substituteSchedule } from './schedule-substitution.js';
+import { substituteSchedule,legacyNamesAreUnambiguous } from './schedule-substitution.js';
 import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-access.js';
 import { scoreHistory } from './score-history.js';
 import { createScoreHistory } from './score-history-client.js';
@@ -21,6 +21,9 @@ import { attendancePolicy } from './attendance-policy.js';
 import { ledger } from './ledger.js';
 import { createLedgerView } from './ledger-client.js';
 import { ledgerCss } from './ledger-style.js';
+import { ledgerLists } from './ledger-lists.js';
+import { createLedgerLists } from './ledger-lists-client.js';
+import { ledgerListsCss } from './ledger-lists-style.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -108,6 +111,7 @@ async function settleSchedule(db,id,input){
   const missing=[];
   for(let ri=0;ri<post.schedule.length;ri++){if(!isScored(ri))continue;for(let mi=0;mi<post.schedule[ri].g.length;mi++)if(!isVoid(post.schedule[ri].g[mi])&&!validResult(results[`${ri}-${mi}`]))missing.push(`${ri+1}라운드 ${mi+1}번 대진`);}
   if(mode==='scored'&&missing.length)return json({error:`승패를 모두 입력해주세요. 미입력: ${missing.join(', ')}`},400);
+  if(!await legacyNamesAreUnambiguous(db,post))return json({error:'옛 대진의 이름이 숨김·이름 변경 기록과 겹쳐 참가자를 확인할 수 없습니다. 참가자 ID를 확인한 뒤 다시 마감해주세요.',conflict:true},409);
   const rankingRows=(await db.prepare('SELECT * FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all()).results;
   if(!rankingRows.length)return json({error:'회원 점수표를 준비하지 못했습니다.'},503);
   const byId=new Map(rankingRows.map(row=>[row.member_id,row]));
@@ -261,11 +265,11 @@ async function readBackup(env,id){
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
   // One read transaction prevents a backup mixing pre-/post-settlement tables.
-  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions'];
-  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','ledger_list_state','ledger_list_revisions'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions});
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions});
   const id='bk-'+crypto.randomUUID(),stored=await backupStorage(data);
   const expired=new Date(Date.now()-31*86400000).toISOString();
   // Publishing the manifest, all chunks and retention cleanup is all-or-nothing.
@@ -279,7 +283,7 @@ async function createBackup(env,kind){
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin,member){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}${ledgerListsCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()},${createLedgerLists.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -291,6 +295,7 @@ export default {async fetch(request,env){
   // Protect live dispatch as well as the archived schedule/ranking API below.
   if(path==='/api/live-courts')return await requireMember(request,env)||liveCourts(request,env);
   if(path==='/api/ledger')return ledger(request,env);
+  if(path.startsWith('/api/ledger-lists/'))return ledgerLists(request,env,path.slice('/api/ledger-lists/'.length));
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path.startsWith('/api/')){
@@ -328,8 +333,8 @@ export default {async fetch(request,env){
         if(type!=='member'&&type!=='guest')return json({error:'회원 또는 게스트를 선택해주세요.'},400);
         if(!Number.isInteger(points)||points<20||points>1000)return json({error:'시드 점수는 20~1000 사이 숫자로 입력해주세요.'},400);
         const revision=await rosterRevision(env.DB);
-        const memberNameDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=?').bind(name).first();
-        const guestNameDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=?').bind(name).first();
+        const memberNameDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0').bind(name).first();
+        const guestNameDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND hidden=0').bind(name).first();
         if(memberNameDup||guestNameDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
         const at=new Date().toISOString();
         if(type==='member'){
@@ -365,8 +370,8 @@ export default {async fetch(request,env){
           :await env.DB.prepare('SELECT guest_id AS person_id,name,points,edit_version FROM guests WHERE guest_id=? AND hidden=0').bind(id).first();
         if(!current)return json({error:'수정할 사람을 찾지 못했습니다. 목록을 새로고침해주세요.'},404);
         if(current.edit_version!==expectedVersion)return json({error:'다른 운영진이 먼저 수정했습니다. 목록을 새로고침한 뒤 다시 시도해주세요.',conflict:true},409);
-        const memberDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND member_id<>?').bind(name,type==='member'?id:'').first();
-        const guestDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND guest_id<>?').bind(name,type==='guest'?id:(current.promoted_guest_id||'')).first();
+        const memberDup=await env.DB.prepare('SELECT member_id FROM ranking_members WHERE name=? AND hidden=0 AND member_id<>?').bind(name,type==='member'?id:'').first();
+        const guestDup=await env.DB.prepare('SELECT guest_id FROM guests WHERE name=? AND hidden=0 AND guest_id<>?').bind(name,type==='guest'?id:'').first();
         if(memberDup||guestDup)return json({error:'회원 또는 게스트에 같은 이름이 이미 있어요. 다른 이름을 써주세요.'},409);
         const at=new Date().toISOString(),pointsChanged=points!==current.points;
         const updateSql=type==='member'
@@ -414,9 +419,11 @@ export default {async fetch(request,env){
         const ids=Array.isArray(input.ids)?[...new Set(input.ids.filter(x=>typeof x==='string'&&x.length<=100))].slice(0,300):[];
         if(!ids.length)return json({error:'이관할 게스트를 선택해주세요.'},400);
         const revision=await rosterRevision(env.DB);
-        const chosen=(await env.DB.prepare('SELECT * FROM guests WHERE hidden=0').all()).results.filter(g=>ids.includes(g.guest_id));
+        const activeGuests=(await env.DB.prepare('SELECT * FROM guests WHERE hidden=0').all()).results;
+        const chosen=activeGuests.filter(g=>ids.includes(g.guest_id));
         if(!chosen.length)return json({error:'이관할 게스트를 찾지 못했습니다.'},404);
-        const memberNames=new Set((await env.DB.prepare('SELECT name FROM ranking_members').all()).results.map(r=>r.name));
+        const memberNames=new Set((await env.DB.prepare('SELECT name FROM ranking_members WHERE hidden=0').all()).results.map(r=>r.name));
+        for(const g of activeGuests)if(!ids.includes(g.guest_id))memberNames.add(g.name);
         for(const g of chosen){if(memberNames.has(g.name))return json({error:`이미 회원에 같은 이름(${g.name})이 있어요. 이름을 바꾼 뒤 이관해주세요.`},409);memberNames.add(g.name);}
         const at=new Date().toISOString(),memberChanges=chosen.map(g=>({member_id:'custom-m-'+crypto.randomUUID(),name:g.name,points:g.points,seed:seedForPoints(g.points),rank:999999,previous_rank:999999,previous_points:g.previous_points,attendance:g.attendance,wins:g.wins,losses:g.losses,updated_at:at,hidden:0,rank_protected:g.rank_protected,floor_protected_at:g.floor_protected_at,promoted_guest_id:g.guest_id}));
         const histories=chosen.map(g=>({id:'pc-'+crypto.randomUUID(),person_type:'guest',person_id:g.guest_id,action:'promote',before_name:g.name,after_name:g.name,before_points:g.points,after_points:g.points,reason:'운영진이 게스트를 회원으로 이관함',created_at:at}));

@@ -12,7 +12,7 @@ export function createMemberAccess(EDITOR,initialMember=false){
 
 export function memberMenuLabel(member){return member?'회원 로그아웃':'회원권한';}
 
-export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory,createLedgerView){
+export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory,createLedgerView,createLedgerLists){
   const scheduleTools=createScheduleTools();
   const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';
   const memberMenuLabel=member=>member?'회원 로그아웃':'회원권한';
@@ -156,7 +156,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   function gateProtectedRoute(hash){pendingMemberTarget=hash;activeMemberContent=false;detailRead++;stopPoll();showMemberGate();}
   if(typeof createLiveView==='function')liveView=createLiveView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#live'});
-  const ledgerView=typeof createLedgerView==='function'?createLedgerView({app,api,esc,EDITOR,message,isCurrent:token=>token===routeToken&&location.hash==='#ledger',setDirty:value=>{dirty=value;},setSaving:value=>{saving=value;}}):null;
+  const ledgerView=typeof createLedgerView==='function'?createLedgerView({app,api,esc,EDITOR,message,createLedgerLists,isCurrent:token=>token===routeToken&&location.hash==='#ledger',setDirty:value=>{dirty=value;},setSaving:value=>{saving=value;}}):null;
   function message(text,error=false){$('message').textContent=text;$('message').className=error?'error':'';}
   async function api(path,options){
     const authEpoch=memberAuthEpoch,requestRoute=routeToken,requestHash=location.hash;
@@ -542,10 +542,16 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       finally{generating=false;if($('generate')===button){button.disabled=false;button.textContent=buttonText;}}
     };render();renderMethods();dialog.showModal();
   }
+  function excellentMemberNames(lists){return new Set(lists.flatMap(list=>(list?.data?.entries||[]).map(e=>String(e.name||'').normalize('NFC').trim()).filter(Boolean)));}
+  function excellentMemberBadge(name,names){return names.has(String(name||'').normalize('NFC').trim())?'<span class="excellent-member-badge" title="선납 또는 찬조 명단에 등록된 회원" aria-label="우수회원">우수회원</span>':'';}
   async function seeds(token){
     if(typeof activeMemberContent!=='undefined')activeMemberContent=true;
-    let type='member',editing=false;const checked=new Set();
-    async function load(){await getPeople(true);const rd=await api('/api/rankings');if(token!==routeToken)return null;return rd;}
+    let type='member',editing=false,excellentNames=new Set(),excellentUnavailable=false;const checked=new Set();
+    async function load(){
+      await getPeople(true);
+      const [rd,lists]=await Promise.all([api('/api/rankings'),Promise.all([api('/api/ledger-lists/prepaid'),api('/api/ledger-lists/sponsors')]).catch(e=>{if(e.memberOnly)throw e;return null;})]);
+      if(token!==routeToken)return null;excellentUnavailable=lists===null;excellentNames=excellentMemberNames(lists||[]);return rd;
+    }
     let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;syncOperators(ranking);
     const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
     function movement(row){if(Number(row.rank_protected)===1)return '<span class="rank-protected">보호적용</span>';const d=Number(row.rank_movement)||0;if(!d)return '<span class="muted">-</span>';return d>0?'<span class="rank-movement">▲ '+d+'</span>':'<span class="rank-down">▼ '+(-d)+'</span>';}
@@ -561,19 +567,19 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';
         const opBtn=row=>ADMIN?'<button type="button" class="op-toggle'+(row.is_operator?' on':'')+'" data-mid="'+esc(row.member_id)+'" data-on="'+(row.is_operator?1:0)+'">'+(row.is_operator?'운영진 해제':'운영진 임명')+'</button>':'';
-        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td><button type="button" class="score-history-open" data-score-history-type="member" data-score-history-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 점수 변화 보기">'+nameHTML(row.name)+'</button>'+crown(row.name)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
+        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td><button type="button" class="score-history-open" data-score-history-type="member" data-score-history-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 점수 변화 보기">'+nameHTML(row.name)+'</button>'+crown(row.name)+excellentMemberBadge(row.name,excellentNames)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>{const ap=Number(a.points)||0,bp=Number(b.points)||0;if(bp!==ap)return bp-ap;if(ap===20){const ag= a.floor_protected_at?1:0,bg=b.floor_protected_at?1:0;if(ag!==bg)return ag-bg;if(ag)return String(a.floor_protected_at).localeCompare(String(b.floor_protected_at));}return a.i-b.i;}).map((p,idx)=>({...p,rank:idx+1}));
         const list=ranked.filter(p=>p.name.includes(term));$('seedCount').textContent='게스트 '+list.length+'명';
-        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td>'+movement(p)+'</td><td><button type="button" class="score-history-open" data-score-history-type="guest" data-score-history-id="'+esc(p.id)+'" aria-label="'+esc(p.name)+' 점수 변화 보기">'+nameHTML(p.name)+'</button>'+manageButtons('guest',p.id,p.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td><span class="pts-cell">'+(typeof p.points==='number'?p.points:'-')+'</span>'+pointsMove(p)+'</td><td>'+(p.attendance??0)+'</td><td>'+(p.wins??0)+'</td><td>'+(p.losses??0)+'</td></tr>').join('');
+        const rows=list.map(p=>'<tr>'+cb(p.id)+'<td>'+p.rank+'</td><td>'+movement(p)+'</td><td><button type="button" class="score-history-open" data-score-history-type="guest" data-score-history-id="'+esc(p.id)+'" aria-label="'+esc(p.name)+' 점수 변화 보기">'+nameHTML(p.name)+'</button>'+excellentMemberBadge(p.name,excellentNames)+manageButtons('guest',p.id,p.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(p.seed||'미정')+'</span></td><td><span class="pts-cell">'+(typeof p.points==='number'?p.points:'-')+'</span>'+pointsMove(p)+'</td><td>'+(p.attendance??0)+'</td><td>'+(p.wins??0)+'</td><td>'+(p.losses??0)+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<p class="seed-note">게스트도 정모 출석 +1, 승 +1, 패 -1로 누적되며, 현재 정보는 DB에서 관리됩니다.</p><div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>게스트</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }
       chk();
     }
     function paint(){
       const adminPanel=ADMIN?'<div class="admin-panel"><div class="admin-head">홈페이지 관리자</div><p class="admin-note">아래 회원 표에서 <b>운영진 임명/해제</b>로 왕관을 달거나 뗄 수 있어요. 공지·대진·시드 백업은 매주 자동 저장되고 1개월간 보관됩니다.</p><div class="sticky-actions"><button id="backupNow" class="primary">지금 백업</button></div><div id="backupList" class="backup-list">불러오는 중…</div></div>':'';
-      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다<br><small>정모 승패 대상 회원만 순위 변동이 표시되고, 최저 20점은 보호될 수 있어요.</small></p>'+adminPanel+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
+      app.innerHTML=crumb()+'<div class="bar"><div><h1>시드현황</h1></div>'+(EDITOR?'<button id="seedEdit"'+(editing?' class="primary"':'')+'>'+(editing?'완료':'수정하기')+'</button>':'')+'</div><p class="seed-note"><strong>'+updatedText+' 최신화된 시드현황표입니다</strong><br>정모 출석 +1, 승 +1, 패 -1을 누적해 시드를 자동 계산합니다<br><small>정모 승패 대상 회원만 순위 변동이 표시되고, 최저 20점은 보호될 수 있어요.</small></p>'+(excellentUnavailable?'<p class="muted" role="status">우수회원 표시를 불러오지 못했습니다. 잠시 후 시드현황을 다시 열어주세요.</p>':'')+adminPanel+(editing?'<div class="sticky-actions"><button id="seedAdd" class="primary">+ 추가하기</button><button id="seedPromote">회원으로 이관</button><button id="seedDelete" class="danger">선택 삭제</button><span class="muted" id="seedChecked"></span></div>':'')+'<div class="tabs"><button id="seedMembers" aria-pressed="true">회원 랭킹</button><button id="seedGuests" aria-pressed="false">게스트</button></div><label>이름 검색<input id="seedSearch" type="search" placeholder="이름으로 찾기"></label><p class="muted" id="seedCount"></p><div id="seedList"></div>';
       $('seedMembers').onclick=()=>{type='member';checked.clear();render();};$('seedGuests').onclick=()=>{type='guest';checked.clear();render();};$('seedSearch').oninput=render;
       $('seedList').addEventListener('click',e=>{const open=e.target.closest('.score-history-open');if(open)historyView?.open(open.dataset.scoreHistoryType,open.dataset.scoreHistoryId);});
       if(EDITOR)$('seedEdit').onclick=()=>{editing=!editing;checked.clear();paint();};

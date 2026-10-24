@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
 import {createLedgerView} from './dist/server/ledger-client.js';
+import {ledgerCss} from './dist/server/ledger-style.js';
 
 const clone=value=>structuredClone(value);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -46,7 +47,33 @@ function harness({initial=ledger(),editor='operator-key',token=1}={}){
   return {app,calls,messages,dirty,saving,view,setAPI:fn=>apiImpl=fn,setServer:value=>server=clone(value),navigate(){token++;},async open(){await view.open(token);},getServer:()=>clone(server)};
 }
 
+async function ledgerListNavigationChecks(){
+  let activeToken=1,listOptions;const app=root(),messages=[],saving=[],dirty=[];let ledgerReads=0;const oldRead=deferred();
+  const api=async(path)=>{
+    if(path!=='/api/ledger')throw Error('unexpected API request '+path);
+    ledgerReads++;if(ledgerReads===2)return oldRead.promise;
+    return {data:ledger([entry('e1','2026-10-01','회비',1000)],100,ledgerReads)};
+  };
+  const view=createLedgerView({app,api,esc,EDITOR:'operator-key',isCurrent:key=>key===activeToken,setDirty:value=>dirty.push(value),setSaving:value=>saving.push(value),message:(...args)=>messages.push(args),createLedgerLists:options=>{listOptions=options;return {open:async()=>{}};}});
+  await view.open(1);
+  const html=app.innerHTML;assert.ok(html.indexOf('id="ledgerPrepaid"')<html.indexOf('id="ledgerSponsors"'),'ledger header places prepaid before sponsor list button');
+  await app.querySelector('#ledgerPrepaid').dispatch('click');assert.ok(listOptions,'ledger view creates the list factory');
+  const pendingBack=listOptions.onBack();
+  activeToken=2;await view.open(2);await app.querySelector('#ledgerEdit').dispatch('click');
+  const description=app.querySelector('[data-field="description"]');assert.ok(description,'new ledger view entered edit mode');
+  description.value='새 화면의 편집 초안';await description.dispatch('input');
+  oldRead.reject(Error('old ledger read failed'));await pendingBack;
+  const stillEditing=app.querySelector('[data-field="description"]');
+  assert.ok(stillEditing,'late back-read failure does not replace the current editor');
+  assert.equal(stillEditing.value,'새 화면의 편집 초안','late failure preserves the new token draft');
+  assert.ok(!app.innerHTML.includes('ledgerRetry'),'late failure does not show an old retry screen');
+}
+
 export async function runLedgerUIChecks(){
+  const memoStyle=ledgerCss.match(/\.ledger-memo\{([^}]+)\}/)?.[1]||'';
+  assert.match(memoStyle,/border:1px solid/,'memo retains a subtle outline');
+  assert.doesNotMatch(memoStyle,/border-top:/,'memo has no thick green top border');
+  await ledgerListNavigationChecks();
   {
     const secret='<script>alert("x")</script>',description='<img src=x onerror=alert(1)>',h=harness({editor:'',initial:ledger([entry('unsafe','2026-10-01',description,0,25,secret)])});await h.open();
     assert.equal(h.app.querySelector('#ledgerEdit'),null,'members cannot enter edit mode');

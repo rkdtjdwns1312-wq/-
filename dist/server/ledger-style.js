@@ -22,7 +22,7 @@ export const ledgerCss=`
 .ledger-table input{min-width:120px;width:100%;min-height:44px;padding:8px;font-size:16px}
 .ledger-table input[type=date]{min-width:150px}.ledger-table input[type=number]{min-width:130px}
 .ledger-table tbody tr:last-child td{border-bottom:0}
-.ledger-memo{box-sizing:border-box;width:min(560px,calc(100vw - 28px));max-height:85vh;max-height:85dvh;overflow:auto;border:1px solid #cfe4d5;border-top:4px solid #03ac50;border-radius:16px;background:#fff;padding:20px;color:#24392e}
+.ledger-memo{box-sizing:border-box;width:min(560px,calc(100vw - 28px));max-height:85vh;max-height:85dvh;overflow:auto;border:1px solid #cfe4d5;border-radius:16px;background:#fff;padding:20px;color:#24392e}
 .ledger-memo::backdrop{background:#14251e66}
 .ledger-memo textarea{box-sizing:border-box;width:100%;min-height:220px;font-size:16px;line-height:1.6;padding:12px;resize:vertical;border:1px solid #d6e6da;border-radius:9px;background:#fff}
 .ledger-note-paper{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.85;padding:16px;background:#f1f8f3;border:1px solid #dfebe2;border-left:3px solid #8bc99d;color:#344039;border-radius:9px;min-height:120px}
