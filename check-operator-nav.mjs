@@ -27,6 +27,10 @@ export function runOperatorNavChecks(){
   assert.match(operatorNavCss,/transform:translateY\(-50%\)/,'desktop menu is vertically centered');
   assert.match(operatorNavCss,/max-height:calc\(100dvh - 24px\);[\s\S]*overflow:auto/,'short viewports scroll the rail itself');
   assert.match(operatorNavCss,/body\.operator-layout\{padding-left:140px\}/,'desktop operator pages reserve rail space');
+  assert.match(operatorNavCss,/body\.operator-layout>header\{position:relative;isolation:isolate;box-shadow:none\}/,'operator header keeps its layout and isolates the full-bleed decoration');
+  assert.match(operatorNavCss,/header::before\{[^}]*bottom:-1px;/,'decoration bottom aligns with the existing one-pixel header border');
+  assert.match(operatorNavCss,/header::before\{[^}]*left:-140px;[^}]*pointer-events:none;[^}]*box-shadow:0 4px 12px rgba\(36,57,46,\.08\)/,'full-bleed header explicitly retains its shadow rather than inheriting none');
+  assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*header::before\{left:-94px\}/,'mobile decoration reaches the left edge too');
   assert.match(operatorNavCss,/min-width:44px;min-height:44px/,'links meet the 44px focus target size');
   assert.match(operatorNavCss,/@media\(max-width:650px\)[\s\S]*body\.operator-layout\{padding-left:94px\}[\s\S]*\.operator-nav\{left:6px;width:82px/,'mobile guard reserves space for the readable fixed menu');
   assert.match(operatorNavCss,/\.operator-nav-link\{[^}]*font-size:\.78rem;[^}]*white-space:nowrap/,'mobile navigation labels stay on one line at a readable size');

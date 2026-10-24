@@ -14,6 +14,8 @@ export function operatorNavHtml(editor){
 
 export const operatorNavCss=`
 body.operator-layout{padding-left:140px}
+body.operator-layout>header{position:relative;isolation:isolate;box-shadow:none}
+body.operator-layout>header::before{content:"";position:absolute;inset:0;bottom:-1px;left:-140px;z-index:-1;pointer-events:none;background:inherit;border-bottom:inherit;box-shadow:0 4px 12px rgba(36,57,46,.08)}
 .operator-nav{position:fixed;left:12px;top:50%;z-index:12;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;width:112px;max-height:calc(100dvh - 24px);padding:8px;background:#087a3d;color:#fff;border:1px solid #056b34;border-radius:16px;box-shadow:0 8px 24px rgba(5,78,38,.22);transform:translateY(-50%);overflow:auto;overscroll-behavior:contain}
 .operator-nav-link{box-sizing:border-box;display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:7px 8px;border:1px solid transparent;border-radius:10px;color:#fff;font-size:.92rem;font-weight:700;line-height:1.3;text-align:center;text-decoration:none;overflow-wrap:anywhere}
 .operator-nav-link:hover{background:#0b9449;border-color:rgba(255,255,255,.45)}
@@ -21,6 +23,7 @@ body.operator-layout{padding-left:140px}
 .operator-layout main,.operator-layout .match,.operator-layout .teams,.operator-layout .team-wrap{min-width:0}
 @media(max-width:650px){
   body.operator-layout{padding-left:94px}
+  body.operator-layout>header::before{left:-94px}
   .operator-nav{left:6px;width:82px;padding:7px 5px;border-radius:12px}
   .operator-nav-link{min-width:44px;min-height:44px;padding:5px 2px;font-size:.78rem;line-height:1.25;white-space:nowrap;word-break:normal;overflow-wrap:normal}
   .operator-layout main{padding:16px 8px}
