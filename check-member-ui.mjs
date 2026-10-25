@@ -46,10 +46,10 @@ async function checkPublicHomeMvp(){
   const home=compile('home',{routeToken:1,app,$:id=>id==='mvpHome'?mvp:null,EDITOR:'',openPicker(){},memberAccess:{allowed:()=>false},api:async()=>{calls++;throw Error('public home must not request MVP');},esc});
   await home();assert.equal(calls,0,'public home does not fetch or display MVP data');assert.match(app.innerHTML,/href="#notice"/,'public home retains the notice route');
   assert.match(app.innerHTML,/class="home-court-banner" src="\/mascot-court-banner\.png" alt="[^"]+" width="2172" height="724"/,'home uses the full-size 3:1 court mascot banner with accessible text');
-  assert.match(css,/:root\{--home-card-height:190px\}/,'desktop menu and banner share a 190px height token');
+  assert.match(css,/:root\{--home-card-height:190px\}/,'desktop menus retain their 190px height token');
   assert.match(css,/\.menus \.menu\{height:var\(--home-card-height\);min-height:var\(--home-card-height\)\}/,'each primary menu button uses the shared fixed height');
-  assert.match(css,/\.home-intro img\.home-court-banner\{[^}]*height:var\(--home-card-height\);aspect-ratio:auto;object-fit:contain;object-position:center;border-radius:22px;mix-blend-mode:normal;background:#eafff1\}/,'the full banner fits without cropping or stretching and uses a soft green fill');
-  assert.match(css,/@media\(max-width:650px\)\{:root\{--home-card-height:115px\}\}/,'mobile menu and banner share a 115px height token');
+  assert.match(css,/\.home-intro img\.home-court-banner\{display:block;width:100%;height:auto;aspect-ratio:34\/9;object-fit:cover;object-position:center 28\.5714286%;border-radius:22px;mix-blend-mode:normal\}/,'banner fills the menu width without solid-color letterboxing, retaining its rounded crop');
+  assert.match(css,/@media\(max-width:650px\)\{:root\{--home-card-height:115px\}\}/,'mobile menus retain their 115px height token');
   assert.match(css,/\.home-intro img\.home-court-banner\{[^}]*width:100%[^}]*border-radius:22px/,'the banner stays full width with rounded corners');
   assert.match(css,/\.home-intro\{padding:12px 0 24px\}/,'desktop banner spacing stays compact');assert.match(css,/@media\(max-width:650px\)\{\.home-intro\{padding:16px 0\}\}/,'mobile banner spacing stays compact');
   assert.match(css,/header\{background:white;border-bottom:1px solid #e4ece7/,'header retains its original white background');assert.match(css,/header\{[^}]*box-shadow:0 4px 12px rgba\(36,57,46,\.08\)/,'header has the requested subtle bottom shadow');assert.match(css,/\.brand-name\{font-size:2\.6rem;color:#03a84e/,'brand name retains its original green');assert.match(css,/\.tagline\{font-size:\.95rem;border-left:1px solid #d8e8df;padding-left:18px;color:#49715b/,'tagline retains its original muted green color');
