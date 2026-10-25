@@ -19,7 +19,8 @@ class Root extends Element {
   parseRoot(html){for(const [,id] of html.matchAll(/\bid="([^"]+)"/g)){const el=this.make(id);if(id==='scheduleVenue')el.maxLength=60;}
     for(const id of ['scheduleDatePanel','scheduleVenuePanel','scheduleTimePanel'])this.make(id).hidden=true;
     for(const id of ['scheduleDateButton','scheduleVenueButton','scheduleTimeButton'])this.make(id).setAttribute('aria-expanded','false');
-    for(const [,attributes,body] of html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/g)){
+    this.selectMarkup=[...html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/g)].map(([,attributes,body])=>({attributes,body}));
+    for(const {attributes,body} of this.selectMarkup){
       const id=attributes.match(/\bid="([^"]+)"/)?.[1];if(!id)continue;
       const select=this.make(id);for(const [,name,value] of attributes.matchAll(/([\w-]+)="([^"]*)"/g))select.setAttribute(name,value);
       select.options=[...body.matchAll(/<option value="([^"]*)"/g)].map(match=>match[1]);
@@ -65,24 +66,29 @@ export function runScheduleInfoUIChecks(){
   showDate(leap.root);const selected=leap.root.calendarDates.find(el=>el.dataset.scheduleDate==='2024-02-29');assert.match(selected.className,/selected/);assert.equal(selected.getAttribute('aria-pressed'),'true');
 
   // Every valid dropdown endpoint is present, while blank/invalid values are rejected.
-  const hour=leap.root.querySelector('#scheduleHour'),minute=leap.root.querySelector('#scheduleMinute');
-  assert.equal(hour.getAttribute('aria-label'),'시 (24시간제)');assert.equal(minute.getAttribute('aria-label'),'분');
-  assert.equal(hour.options.length,25);assert.equal(hour.options[0],'');assert.equal(hour.options[1],'00');assert.equal(hour.options.at(-1),'23');
-  assert.equal(minute.options.length,60);assert.equal(minute.options[0],'00');assert.equal(minute.options.at(-1),'59');
+  const hour=leap.root.querySelector('#scheduleHour');
+  assert.equal(hour.getAttribute('aria-label'),'시 (24시간제)');
+  assert.equal(hour.options.length,25);assert.equal(hour.options[0],'');assert.deepEqual(hour.options.slice(1),Array.from({length:24},(_,n)=>String(n).padStart(2,'0')));
+  assert.deepEqual([...leap.root.innerHTML.matchAll(/<option value="(\d{2})">([^<]+)<\/option>/g)].map(([,value,label])=>[value,label]),Array.from({length:24},(_,n)=>[String(n).padStart(2,'0'),n+'시']));
+  assert.ok(!leap.root.innerHTML.includes('scheduleMinute'));assert.equal(leap.root.selectMarkup.length,1,'minutes selector is removed');
   assert.throws(()=>leap.api.read(),/장소/);
   leap.root.set('scheduleVenue','중앙체육관');assert.throws(()=>leap.api.read(),/시작시간/);
-  leap.root.set('scheduleHour','00','onchange');leap.root.set('scheduleMinute','00','onchange');
-  assert.equal(leap.api.read().title,'2월 29일(목) 중앙체육관 00:00');
-  leap.root.set('scheduleHour','23','onchange');leap.root.set('scheduleMinute','59','onchange');
-  assert.equal(leap.api.read().title,'2월 29일(목) 중앙체육관 23:59');
+  for(const [value,label] of [['00','0시'],['09','9시'],['13','13시'],['23','23시']]){
+    leap.root.set('scheduleHour',value,'onchange');
+    const expected='2월 29일(목) 중앙체육관 '+label;
+    assert.equal(leap.root.querySelector('#scheduleTimeButton').textContent,label);
+    assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,expected);
+    assert.equal(leap.api.read().title,expected);
+  }
+  leap.root.set('scheduleHour','','onchange');assert.throws(()=>leap.api.read(),/시작시간/);assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,'날짜·장소·시작시간을 선택해주세요.');
   leap.root.set('scheduleHour','24','onchange');assert.throws(()=>leap.api.read(),/시작시간/);
-  leap.root.set('scheduleHour','23','onchange');leap.root.set('scheduleMinute','60','onchange');assert.throws(()=>leap.api.read(),/시작시간/);
+  for(const invalid of ['-1','1',' 09','09 ','abc']){leap.root.set('scheduleHour',invalid,'onchange');assert.throws(()=>leap.api.read(),/시작시간/);}
 
   // Place is trimmed and normalized; preview uses textContent so markup stays literal.
-  leap.root.set('scheduleMinute','59','onchange');leap.root.set('scheduleVenue','  <b>중앙</b>   체육관  ');
-  assert.equal(leap.api.read().title,'2월 29일(목) <b>중앙</b> 체육관 23:59');
-  assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,'2월 29일(목) <b>중앙</b> 체육관 23:59');
-  leap.root.set('scheduleVenue','x'.repeat(60));assert.equal(leap.api.read().title,'2월 29일(목) '+'x'.repeat(60)+' 23:59');
+  leap.root.set('scheduleHour','23','onchange');leap.root.set('scheduleVenue','  <b>중앙</b>   체육관  ');
+  assert.equal(leap.api.read().title,'2월 29일(목) <b>중앙</b> 체육관 23시');
+  assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,'2월 29일(목) <b>중앙</b> 체육관 23시');
+  leap.root.set('scheduleVenue','x'.repeat(60));assert.equal(leap.api.read().title,'2월 29일(목) '+'x'.repeat(60)+' 23시');
   leap.root.set('scheduleVenue','x'.repeat(61));assert.throws(()=>leap.api.read(),/1~60자/);
 
   // Escape closes the active panel but retains the values and selected date.
@@ -90,7 +96,7 @@ export function runScheduleInfoUIChecks(){
   const escape=leap.root.key('Escape');assert.equal(escape.prevented,true);assert.equal(escape.stopped,true);
   assert.equal(leap.root.querySelector('#scheduleVenuePanel').hidden,true);assert.equal(leap.root.querySelector('#scheduleVenue').value,'  체육관  ');
   assert.equal(leap.root.querySelector('#scheduleDateButton').textContent,'2월 29일(목)');
-  assert.equal(leap.api.read().title,'2월 29일(목) 체육관 23:59');
+  assert.equal(leap.api.read().title,'2월 29일(목) 체육관 23시');
 
   // A new factory instance starts without a date or place from an earlier instance.
   const fresh=mount([2024,2,8]);assert.throws(()=>fresh.api.read(),/날짜/);showDate(fresh.root);assert.equal(fresh.root.calendarDates.length,29);
