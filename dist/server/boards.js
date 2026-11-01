@@ -14,6 +14,8 @@ import { rosterRevision,commitRoster,updateRows,insertRows } from './roster-writ
 import { substituteSchedule,legacyNamesAreUnambiguous } from './schedule-substitution.js';
 import { scheduleTitle } from './schedule-title.js';
 import { memberAccessEndpoint,requireMember,hasMemberAccess } from './member-access.js';
+import { memberScheduleAccessEndpoint,readMemberScheduleAccess } from './member-schedule-access.js';
+import { validScheduleDate,resolveScheduleDate,titleMatchesScheduleDate,memberMayEditSchedule } from './member-schedule-policy.js';
 import { scoreHistory } from './score-history.js';
 import { createScoreHistory } from './score-history-client.js';
 import { scoreHistoryCss } from './score-history-style.js';
@@ -83,6 +85,7 @@ function validate(d,kind){
   const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,lateRounds,lateRegistration,results:cleanResults(d.results,schedule),settledAt:null};
   if(Array.isArray(d.mvp))base.mvp=d.mvp.filter(x=>typeof x==='string').slice(0,50);
   if(Array.isArray(d.absent))base.absent=d.absent.filter(x=>typeof x==='string'&&d.names.includes(x)).slice(0,200);
+  if(d.scheduleDate!=null){if(!validScheduleDate(d.scheduleDate))throw Error('대진 날짜를 확인해주세요.');base.scheduleDate=d.scheduleDate;}
   return base;
 }
 async function settleSchedule(db,id,input){
@@ -303,6 +306,7 @@ export default {async fetch(request,env){
   const editor=admin?key||'':(Boolean(key)&&path==='/operate-'+key?key:'');
   if(path==='/api/operator-login')return operatorLogin(request,env);
   if(['/api/member-login','/api/member-logout','/api/member-session','/api/member-access/config'].includes(path))return memberAccessEndpoint(request,env);
+  if(['/api/member-schedule-login','/api/member-schedule-session','/api/member-schedule-access/config'].includes(path))return memberScheduleAccessEndpoint(request,env);
   // Protect live dispatch as well as the archived schedule/ranking API below.
   if(path==='/api/live-courts')return await requireMember(request,env)||liveCourts(request,env);
   if(path==='/api/ledger')return ledger(request,env);
@@ -576,7 +580,14 @@ export default {async fetch(request,env){
       if(request.method==='GET'){
         const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
         if(row?.kind==='schedule'){const blocked=await requireMember(request,env);if(blocked)return blocked;}
-        return row?json({data:unpack(row)}):json({error:'게시글을 찾을 수 없습니다.'},404);
+        if(!row)return json({error:'게시글을 찾을 수 없습니다.'},404);
+        const data=unpack(row);
+        if(row.kind==='schedule'&&!(key&&request.headers.get('x-kokkiri-editor')===key)){
+          const access=await readMemberScheduleAccess(request,env);
+          data.memberScheduleEditable=memberMayEditSchedule(data,access);
+          const day=resolveScheduleDate(data);if(day)data.scheduleDate=day;
+        }
+        return json({data});
       }
       if(request.method==='DELETE'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 삭제할 수 있습니다.'},403);
@@ -588,7 +599,13 @@ export default {async fetch(request,env){
         return json({data:{deleted:true}});
       }
       if(request.method!=='PUT')return json({error:'허용되지 않은 요청입니다.'},405);
-      if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 저장할 수 있습니다.'},403);
+      const operatorWrite=Boolean(key&&request.headers.get('x-kokkiri-editor')===key);
+      let memberWrite=null;
+      if(!operatorWrite){
+        memberWrite=await readMemberScheduleAccess(request,env);
+        if(!memberWrite.allowed)return json({error:'회원 대진 만들기 인증이 필요합니다. 오늘 대진만 만들거나 수정할 수 있습니다.',code:'SCHEDULE_ACCESS_REQUIRED'},403);
+        const blocked=await requireMember(request,env);if(blocked)return blocked;
+      }
       const raw=await request.text();if(raw.length>200000)return json({error:'내용이 너무 큽니다.'},413);
       let input,payload;
       try{
@@ -596,6 +613,27 @@ export default {async fetch(request,env){
         if(!['schedule','notice'].includes(input.kind)||!Number.isInteger(input.version)||input.version<0||typeof input.operation!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(input.operation))throw Error('저장 요청을 확인해주세요.');
         payload=validate(input.data,input.kind);
       }catch(e){return json({error:e.message||'입력 내용을 확인해주세요.'},400);}
+      const existingRow=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
+      const existingPost=existingRow?unpack(existingRow):null;
+      if(!operatorWrite){
+        if(input.kind!=='schedule')return json({error:'당일 대진만 만들거나 수정할 수 있습니다.'},403);
+        // Check the stored event BEFORE any retry shortcut; spoofing version 0,
+        // operation IDs or today's date cannot unlock an older/closed post.
+        if(existingPost){
+          if(!memberMayEditSchedule(existingPost,memberWrite))return json({error:'권한이 없습니다. 오늘의 미마감 대진만 수정할 수 있습니다.'},403);
+          if(payload.scheduleDate!==memberWrite.today||payload.title!==existingPost.title)return json({error:'회원은 기존 대진의 날짜와 제목을 변경할 수 없습니다.'},403);
+        }else if(input.version!==0||payload.scheduleDate!==memberWrite.today||!titleMatchesScheduleDate(payload.title,memberWrite.today)){
+          return json({error:'한국 시간 기준 오늘 날짜의 대진만 만들 수 있습니다.'},403);
+        }
+        // MVP and closure metadata are never member-writable.
+        if(existingPost?.mvp)payload.mvp=existingPost.mvp;else delete payload.mvp;
+      }
+      if(existingRow&&(existingRow.kind!==input.kind||(existingRow.version!==input.version&&!(existingRow.version===input.version+1&&existingRow.last_operation===input.operation))))return json({error:'대진이 다른 기기에서 변경되었습니다. 최신 내용을 다시 열어주세요.',conflict:true},409);
+      if(input.kind==='schedule'&&existingPost?.kind==='schedule'){
+        const originalDay=resolveScheduleDate(existingPost);
+        if(originalDay)payload.scheduleDate=originalDay;
+        if(existingPost.preTitle!=null)payload.preTitle=existingPost.preTitle;
+      }
       if(input.kind==='schedule')payload.matchProgress={};
       if(input.kind==='schedule'&&input.version>0){
         const existing=await env.DB.prepare('SELECT payload FROM board_posts WHERE id=? AND kind=\'schedule\'').bind(id).first();
@@ -612,13 +650,20 @@ export default {async fetch(request,env){
         }
       }
       const at=new Date().toISOString();
+      if(!operatorWrite){
+        const latestAccess=await readMemberScheduleAccess(request,env);
+        if(!latestAccess.allowed||latestAccess.today!==memberWrite.today)return json({error:'당일 대진 권한이 만료되었습니다. 다시 인증해주세요.',code:'SCHEDULE_ACCESS_REQUIRED'},403);
+      }
+      // Database clock closes the final race if midnight falls after the last
+      // async permission check but before the write reaches D1.
+      const dayGuard=operatorWrite?'':" AND strftime('%Y-%m-%d','now','+9 hours')=?";
       const result=input.version===0
-        ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(id,input.kind,JSON.stringify(payload),input.operation,at,at).run()
-        :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?').bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version).run();
+        ?await env.DB.prepare('INSERT OR IGNORE INTO board_posts (id,kind,payload,version,last_operation,created_at,updated_at) SELECT ?,?,?,1,?,?,? WHERE 1=1'+dayGuard).bind(id,input.kind,JSON.stringify(payload),input.operation,at,at,...(operatorWrite?[]:[memberWrite.today])).run()
+        :await env.DB.prepare('UPDATE board_posts SET payload=?,version=version+1,last_operation=?,updated_at=? WHERE id=? AND kind=? AND version=?'+dayGuard).bind(JSON.stringify(payload),input.operation,at,id,input.kind,input.version,...(operatorWrite?[]:[memberWrite.today])).run();
       // Draft creation/editing never clears the latest confirmed weekly results.
       const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
       if(!row)return json({error:'수정할 게시글이 없습니다.'},404);
-      if(!result.meta.changes&&row.last_operation!==input.operation)return json({error:'다른 운영진이 먼저 수정했습니다. 입력 내용은 유지됩니다. 새 탭에서 최신 글을 확인한 뒤 다시 수정해주세요.'},409);
+      if(!result.meta.changes&&(row.last_operation!==input.operation||row.kind!==input.kind||row.version!==input.version+1||JSON.stringify(JSON.parse(row.payload))!==JSON.stringify(payload)))return json({error:'다른 기기에서 먼저 수정했거나 권한이 만료되었습니다. 입력 내용은 유지됩니다. 최신 글을 확인한 뒤 다시 수정해주세요.'},409);
       return json({data:unpack(row)});
     }catch(error){if(error?.conflict)return json({error:error.message,conflict:true},409);console.error('Board request failed',error);return json({error:'저장소에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
   }

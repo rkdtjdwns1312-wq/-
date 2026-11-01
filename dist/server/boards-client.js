@@ -167,6 +167,51 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     if(!r.ok){const error=Error(x.error||'요청에 실패했습니다.');error.status=r.status;error.code=x&&x.code;if(error.code==='MEMBERS_ONLY'&&authEpoch===memberAuthEpoch){const ownsCurrentRoute=requestRoute===routeToken&&requestHash===location.hash,currentHash=ownsCurrentRoute?requestHash:location.hash,directPrivateDetail=ownsCurrentRoute&&requestHash.startsWith('#post/')&&/^\/api\/posts\/[a-zA-Z0-9-]{1,80}$/.test(target.pathname),currentPrivate=activeMemberContent||memberOnlyHash(currentHash)||directPrivateDetail;if(currentPrivate)pendingMemberTarget=currentHash||'#home';invalidateMemberAccess();if(currentPrivate){showMemberGate();error.memberOnly=true;}else renderCurrentPublicRoute();}throw error;}
     return x;
   }
+  async function memberScheduleSession(){
+    const session=await api('/api/member-schedule-session');
+    if(!memberAccess.member()||!session||session.allowed!==true||!/^\d{4}-\d{2}-\d{2}$/.test(session.today)||!Number.isFinite(session.expiresAt)||session.expiresAt<=Date.now())throw Error('회원 대진 권한을 확인하지 못했습니다. 다시 인증해주세요.');
+    return session;
+  }
+  async function validateMemberSchedule(existing,allowReplay=false){
+    const session=await memberScheduleSession();
+    if(existing){
+      if(existing.scheduleDate!==session.today)throw Error('오늘의 대진만 수정할 수 있습니다.');
+      if(existing.version){
+        const {data}=await api('/api/posts/'+encodeURIComponent(existing.id));
+        if(!data||data.memberScheduleEditable!==true||data.scheduleDate!==session.today||data.settledAt||(data.version!==existing.version&&!(allowReplay&&data.version===existing.version+1)))throw Error('대진 권한이나 최신 상태가 변경되었습니다. 다시 열어주세요.');
+      }
+    }
+    return session;
+  }
+  let memberScheduleOpening=false;
+  async function openMemberScheduleCreate(){
+    if(memberScheduleOpening||dialog.open||!memberAccess.member()||location.hash!=='#schedule')return;
+    const token=routeToken,epoch=memberAuthEpoch;
+    const active=()=>token===routeToken&&epoch===memberAuthEpoch&&memberAccess.member()&&location.hash==='#schedule'&&!dialog.open;
+    memberScheduleOpening=true;
+    try{
+      const session=await api('/api/member-schedule-session');
+      if(!active())return;
+      if(session?.allowed===false){openMemberScheduleLogin();return;}
+      if(session?.allowed!==true||!/^\d{4}-\d{2}-\d{2}$/.test(session.today)||!Number.isFinite(session.expiresAt)||session.expiresAt<=Date.now())throw Error('회원 대진 권한을 확인하지 못했습니다. 다시 시도해주세요.');
+      await openPicker(null);
+    }catch(error){if(active()&&!error.memberOnly)message(error.message||'회원 대진 권한을 확인하지 못했습니다.',true);}
+    finally{memberScheduleOpening=false;}
+  }
+  function openMemberScheduleLogin(){
+    if(dialog.open||!memberAccess.member()||location.hash!=='#schedule')return;
+    const token=routeToken,epoch=memberAuthEpoch,owner=++memberDialogOwner;
+    dialog.innerHTML='<form id="memberScheduleLogin"><div class="dialog-head"><h2 id="pickerTitle">회원 대진 만들기</h2><button type="button" id="scheduleLoginClose" aria-label="닫기">×</button></div><label for="schedulePassword">대진 만들기 비밀번호</label><input id="schedulePassword" type="password" autocomplete="current-password" maxlength="128" required><p id="scheduleLoginError" class="login-error" role="alert"></p><div class="sticky-actions"><button type="submit" id="scheduleLoginSubmit" class="primary">확인</button><button type="button" id="scheduleLoginCancel">취소</button></div></form>';
+    const form=$('memberScheduleLogin'),password=$('schedulePassword'),submit=$('scheduleLoginSubmit'),error=$('scheduleLoginError');
+    const active=()=>dialog.open&&dialog.querySelector('#memberScheduleLogin')===form&&owner===memberDialogOwner&&token===routeToken&&epoch===memberAuthEpoch&&memberAccess.member()&&location.hash==='#schedule';
+    $('scheduleLoginClose').onclick=$('scheduleLoginCancel').onclick=()=>dialog.close();
+    dialog.oncancel=null;dialog.onclose=()=>{if(!dialog.open&&dialog.querySelector('#memberScheduleLogin')===form){dialog.onclose=null;dialog.innerHTML='';}};
+    form.onsubmit=async event=>{event.preventDefault();if(submit.disabled||!active())return;submit.disabled=true;error.textContent='';
+      try{const result=await api('/api/member-schedule-login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:password.value})});if(!active())return;if(result?.allowed!==true)throw Error('대진 만들기 권한을 확인하지 못했습니다.');password.value='';dialog.onclose=null;dialog.close();await openPicker(null);}
+      catch(e){if(active()){error.textContent=e.message||'인증하지 못했습니다.';password.focus();password.select();}}
+      finally{if(active())submit.disabled=false;}
+    };dialog.showModal();password.focus();
+  }
   if(typeof createScoreHistory==='function')historyView=createScoreHistory({dialog,api,esc,isAllowed:()=>memberAccess.allowed(),notify:message});
   async function logoutMember(button){
     if(!memberAccess.member())return;
@@ -200,6 +245,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   async function board(kind,token){
     if(typeof activeMemberContent!=='undefined')activeMemberContent=kind==='schedule';
     app.innerHTML=crumb()+'<div class="bar"><div><h1>'+(kind==='schedule'?'대진표':'공지사항')+'</h1><p class="muted">'+(kind==='schedule'?'제목을 누르면 그날의 대진표를 볼 수 있어요.':'콕끼리의 새로운 소식을 확인하세요.')+'</p></div>'+(EDITOR?'<div class="schedule-board-actions">'+(kind==='schedule'?'<button type="button" id="boardTitleEdit" aria-pressed="false">편집</button>':'')+'<button id="newPost" class="primary">+ '+(kind==='schedule'?'대진 만들기':'공지 쓰기')+'</button></div>':'')+'</div><div class="panel" id="postList"><p class="empty">불러오는 중…</p></div><button class="more" id="more" hidden>더 보기</button>';
+    if(!EDITOR&&kind==='schedule'&&memberAccess.member()){const button=document.createElement('button');button.type='button';button.className='primary';button.textContent='회원 대진 만들기';button.onclick=openMemberScheduleCreate;app.querySelector('.bar').append(button);}
     if(EDITOR)$('newPost').onclick=()=>kind==='schedule'?openPicker(null):editNotice({id:crypto.randomUUID(),kind,version:0,title:'',body:''});
     let offset=0,titleEditing=false,items=[];
     function renderList(){
@@ -309,10 +355,15 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       try{roster=await getPeople(true);}catch(e){}
       if(!current())return;
     }
+    let memberEditable=false;
+    if(!EDITOR&&d.kind==='schedule'&&typeof memberAccess!=='undefined'&&memberAccess.member()){
+      try{const session=await memberScheduleSession();memberEditable=d.memberScheduleEditable===true&&!d.settledAt&&d.scheduleDate===session.today;}catch(e){}
+      if(!current())return;
+    }
     const dVoid=m=>Array.isArray(d.absent)&&d.absent.length>0&&m.some(n=>d.absent.includes(n));
     const allScoredDone=d.kind==='schedule'&&d.schedule.every((r,ri)=>r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';}));
     const editable=EDITOR&&!(d.kind==='schedule'&&d.settledAt),canEmergencySubstitute=Boolean(EDITOR&&d.kind==='schedule'&&!d.settledAt&&Number(d.version)>0);
-    const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button>'+(canEmergencySubstitute?'<button id="emergencySubstitute" class="emergency-substitute">긴급교체</button>':'')+'<button id="deletePost" class="danger">삭제</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
+    const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button>'+(canEmergencySubstitute?'<button id="emergencySubstitute" class="emergency-substitute">긴급교체</button>':'')+'<button id="deletePost" class="danger">삭제</button></div>':memberEditable?'<div class="detail-actions"><button id="editPost">수정하기</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
     const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>'+(!allScoredDone?'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력해야 점수를 반영하는 <b>예</b>를 누를 수 있습니다. <b>출석만 반영</b> 또는 <b>미반영마감</b>은 지금도 선택할 수 있어요.</div>':''):'';
     app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.preTitle||d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">'+(d.settlementMode==='unscored'?'미반영마감 · 시드 미반영':d.settlementMode==='attendance'?'출석만 반영 완료':'점수 반영 완료')+'</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt,roster)+endBtn)+'</article>';
@@ -320,7 +371,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn,token));
       bindProgressControls(d,token);
     }
-    if(EDITOR&&$('editPost'))$('editPost').onclick=()=>d.kind==='notice'?editNotice(d):editSchedule(d,roster);
+    if($('editPost'))$('editPost').onclick=async()=>{if(EDITOR)return d.kind==='notice'?editNotice(d):editSchedule(d,roster);try{await validateMemberSchedule(d);if(current())editSchedule(d,roster);}catch(e){if(current())message(e.message,true);}};
     if(canEmergencySubstitute&&$('emergencySubstitute'))$('emergencySubstitute').onclick=()=>openEmergencySubstitute(d,token);
     if(EDITOR&&$('deletePost'))$('deletePost').onclick=async()=>{if(!confirm((d.kind==='schedule'?'이 대진표':'이 공지')+'를 삭제할까요? 삭제하면 되돌릴 수 없습니다.'))return;try{await api('/api/posts/'+encodeURIComponent(d.id),{method:'DELETE',headers:{'x-kokkiri-editor':EDITOR}});}catch(e){return message(e.message,true);}location.hash='#'+d.kind;};
     if($('endMatch'))$('endMatch').onclick=()=>endMatch(d,token,allScoredDone);
@@ -398,6 +449,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     stopPoll();startDraft(d);draft.results=draft.results||{};draft.absent=Array.isArray(draft.absent)?draft.absent:[];
     editRoster=roster;
     app.innerHTML=crumb('schedule')+'<section class="panel detail"><h1>'+(d.version?'대진표 수정':'대진표 저장')+'</h1><label>대진 제목<input id="editTitle" maxlength="120" placeholder="비워두면 오늘 날짜와 시간이 제목이 됩니다" value="'+esc(d.title)+'"></label><div class="edit-info">선수를 선택하면 같은 라운드의 두 자리가 맞교환됩니다. 휴식자를 넣으면 빠진 선수가 휴식으로 이동합니다. 바뀐 대진의 승패·진행 상태는 초기화됩니다. 승패를 유지한 채 한 자리만 바꾸려면 대진표 화면의 긴급교체를 이용하세요. 승패 기록과 대진 마감(점수 확정)은 저장한 뒤 대진표 화면에서 합니다. 랜덤 라운드는 승패를 기록하지 않아요.</div><div class="sticky-actions"><button id="changeParticipants">참가자·코트 변경</button><button id="savePost" class="primary">'+(d.version?'대진·승패 저장':'대진 저장')+'</button><button id="cancelEdit">취소</button></div><div id="editMatches">'+scheduleHTML(draft,true,true,editRoster)+'</div></section>';
+    if(typeof EDITOR!=='undefined'&&!EDITOR){$('editTitle').readOnly=true;app.querySelector('.edit-info').textContent='선수를 선택하면 같은 라운드의 두 자리가 맞교환됩니다. 휴식자를 넣으면 빠진 선수가 휴식으로 이동합니다. 바뀐 대진의 승패·진행 상태는 초기화됩니다.';}
     $('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};
     $('editMatches').onclick=e=>{
       const abs=e.target.closest('[data-absent-name]');
@@ -422,7 +474,9 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   function editNotice(d){stopPoll();startDraft(d);app.innerHTML=crumb('notice')+'<section class="panel detail"><h1>'+(d.version?'공지 수정':'공지 쓰기')+'</h1><label>제목<input id="editTitle" maxlength="120" value="'+esc(d.title)+'" placeholder="비워두면 오늘 날짜와 시간"></label><label>내용<textarea id="noticeBody" maxlength="20000">'+esc(d.body)+'</textarea></label><p class="edit-info">줄 앞에 1. 2. 를 붙이면 큰 제목, [소제목]은 작은 제목, ▶ 나 - 로 시작하면 목록으로 보기 좋게 표시됩니다. 🔵 로 시작하면 강조 메모가 됩니다. 🔴 로 시작하면 큰 빨간 제목이 됩니다.</p><div class="sticky-actions"><button id="savePost" class="primary">저장하기</button><button id="cancelEdit">취소</button></div></section>';$('editTitle').oninput=()=>{draft.title=$('editTitle').value;changed();};$('noticeBody').oninput=()=>{draft.body=$('noticeBody').value;changed();};$('savePost').onclick=save;$('cancelEdit').onclick=cancelEdit;}
   function cancelEdit(){if(dirty&&!confirm('저장하지 않은 변경 내용을 취소할까요?'))return;const target=draft.version?'#post/'+draft.id:'#'+draft.kind;dirty=false;draft=null;if(location.hash===target)route();else location.hash=target;}
   async function persistDraft(){
-    const {data}=await api('/api/posts/'+draft.id,{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':EDITOR},body:JSON.stringify({kind:draft.kind,version:draft.version,operation:draft.operation,data:draft})});draft=data;dirty=false;return data;
+    const target=draft,token=routeToken;
+    if(!EDITOR){await validateMemberSchedule(target,true);if(draft!==target||routeToken!==token||!memberAccess.member())throw Error('화면이 변경되어 저장을 취소했습니다.');}
+    const {data}=await api('/api/posts/'+target.id,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({kind:target.kind,version:target.version,operation:target.operation,data:target})});draft=data;dirty=false;return data;
   }
   async function save(){
     if(saving||!draft)return;
@@ -450,7 +504,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       try{
         if(forceRefresh){await detail(d.id,token);return;}
         const fresh=(await api('/api/posts/'+encodeURIComponent(d.id))).data;
-        if(currentDetail(d.id,token)&&!recordingResult&&!saving&&(fresh.version!==d.version||Boolean(fresh.settledAt)!==Boolean(d.settledAt)))await detail(d.id,token);
+        if(currentDetail(d.id,token)&&!recordingResult&&!saving&&(fresh.version!==d.version||Boolean(fresh.settledAt)!==Boolean(d.settledAt)||Boolean(fresh.memberScheduleEditable)!==Boolean(d.memberScheduleEditable)))await detail(d.id,token);
       }catch(e){/* Keep polling after a transient read failure. */}
       finally{pending=false;}
     },5000);
@@ -534,11 +588,13 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   function confirmDialog(msg,options){options=options||{};return new Promise(resolve=>{let done=false,settlement=options.settlement===true,scoredAllowed=options.scoredAllowed!==false;const onCancel=e=>{e.preventDefault();finish(false);},onClose=()=>finish(false),finish=v=>{if(done)return;done=true;dialog.removeEventListener('cancel',onCancel);dialog.removeEventListener('close',onClose);if(dialog.open)try{dialog.close();}catch(e){}resolve(v);};dialog.innerHTML='<div class="confirm-box"><p class="confirm-msg">'+esc(msg)+'</p>'+(settlement?'<p class="end-note">'+(scoredAllowed?'예는 출석·승패 점수를 모두 반영합니다. 출석만 반영은 참석자에게 출석 +1점만 적용하며, 미반영마감은 점수 없이 대진만 잠급니다.':'승패 결과가 모두 기록되지 않아 <b>예</b>는 사용할 수 없습니다. <b>출석만 반영</b> 또는 <b>미반영마감</b>은 선택할 수 있습니다.')+'</p>':'')+'<div class="confirm-actions"><button id="confirmNo">아니오</button><button id="confirmYes" class="primary"'+(settlement&&!scoredAllowed?' disabled':'')+'>예</button>'+(settlement?'<button id="confirmAttendance" class="settle-attendance">출석만 반영</button><button id="confirmUnscored" class="settle-unscored">미반영마감</button>':'')+'</div></div>';$('confirmYes').onclick=()=>{if(scoredAllowed)finish(settlement?'scored':true);};$('confirmNo').onclick=()=>finish(false);if(settlement){$('confirmAttendance').onclick=()=>finish('attendance');$('confirmUnscored').onclick=()=>finish('unscored');}dialog.addEventListener('cancel',onCancel);dialog.addEventListener('close',onClose);dialog.showModal();});}
   async function openPicker(existing){
-    if(!EDITOR)return;
     const token=routeToken;
+    if(!EDITOR&&dialog.open)return;
+    let memberSession=null;
+    if(!EDITOR){try{memberSession=await validateMemberSchedule(existing);if(token!==routeToken||!memberAccess.member())return;}catch(e){if(token===routeToken)message(e.message,true);return;}}
     let latestPeople;
     try{latestPeople=await getPeople(true);}catch(e){if(token===routeToken)message(e.message,true);return;}
-    if(token!==routeToken)return;
+    if(token!==routeToken||(!EDITOR&&dialog.open))return;
     const pickerPeople=latestPeople.slice();
     const pickerNameOf=p=>pickerPeople.some(q=>q.name===p.name&&q.id!==p.id)?p.name+' ('+(p.type==='member'?'회원':'게스트')+')':p.name;
     if(existing&&Array.isArray(existing.participantIds)&&Array.isArray(existing.names))existing.participantIds.forEach((pid,i)=>{const nm=existing.names[i];if(pid&&typeof nm==='string'&&nm.trim()&&!pickerPeople.some(p=>p.id===pid))pickerPeople.push({id:pid,name:nm,type:'guest',seed:'미정',points:0,adhoc:true});});
@@ -548,7 +604,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     const lateRegistration=new Set(Array.isArray(existing?.lateRegistration)?existing.lateRegistration:[]);
     const lateOpen=new Set(Object.keys(lateRounds).concat([...lateRegistration]));
     dialog.innerHTML='<div class="dialog-head"><h2 id="pickerTitle">'+(existing?'참가자·코트 변경':'새 대진 만들기')+'</h2><button id="closePicker" aria-label="닫기">×</button></div>'+(existing?'<label>대진 제목<input id="newTitle" maxlength="120" value="'+esc(existing.title||'')+'"></label>':'<div id="scheduleInfo"></div>')+'<div class="two"><label>코트 수<input id="courts" type="number" min="1" max="20" value="'+(existing?.courts||3)+'"></label><label>라운드 수<input id="rounds" type="number" min="1" max="20" value="'+(existing?.rounds||4)+'"></label></div><div id="roundMethods" class="round-methods"></div><div class="tabs"><button id="memberTab" aria-pressed="true">회원</button><button id="guestTab" aria-pressed="false">게스트</button></div><label>이름 검색<input id="searchPeople" type="search" placeholder="이름으로 찾기"></label><div class="add-guest"><input id="newGuestName" maxlength="100" placeholder="새로 온 게스트 이름"><button type="button" id="addGuest">추가하기</button></div><p id="selectedCount" aria-live="polite"></p><div class="people-grid picker-list" id="choices"></div><div class="sticky-actions"><button id="selectAll">현재 목록 전체 선택</button><button id="clearAll">전체 선택 해제</button></div><p class="seed-note">라운드마다 매칭 방식을 고르면 시드 점수를 반영해 대진이 만들어집니다. 동일은 휴식·늦참을 뺀 뒤 점수순 4명씩 고정으로 묶고, 동일 라운드 회차마다 1·4 vs 2·3 → 1·3 vs 2·4 → 1·2 vs 3·4 팀 조합을 순환합니다. 동일의 고정 묶음·팀은 중복 후처리로 바꾸지 않습니다. 인접은 휴식·늦참을 뺀 뒤 점수 내림차순 4명씩 박스로 묶고, 한 경기에서 각 박스는 최대 2명만 사용하며 가까운 박스부터 우선 혼합합니다. 인접한 두 박스 8명은 1·2·5·6 / 3·4·7·8 방식으로 섞고, 출전 인원이 4명뿐인 라운드는 다른 박스와 섞지 않고 예외 편성합니다. 인접은 박스·근접 제약을 지키며 파트너 중복을 줄이고, 조건상 남는 팀 동반 반복은 그대로 안내합니다. 휴식·늦참과 랜덤은 바꾸지 않습니다. 늦참 2는 1·2R 제외 후 3R부터 참여합니다. 늦참으로 2라운드 이상 빠진 운영진·게스트는 도착 후 추가 자동 휴식에서 제외됩니다. 휴식은 신청늦음→게스트→운영진 각 1회, 이후 일반회원 중 덜 쉰 사람을 무작위로 배정합니다.</p><p id="pickerError" class="login-error" role="alert"></p><button id="generate" class="primary">'+(existing?'선택한 참가자로 대진 다시 만들기':'선택한 참가자로 대진 만들기')+'</button>';
-    const scheduleInfo=existing?null:createScheduleInfo({root:$('scheduleInfo'),esc});
+    if(existing&&!EDITOR)$('newTitle').readOnly=true;
+    const scheduleInfo=existing?null:createScheduleInfo({root:$('scheduleInfo'),esc,...(!EDITOR?{fixedDate:memberSession.today}:{})});
     const visible=()=>pickerPeople.filter(p=>p.type===active&&p.name.includes($('searchPeople').value.trim()));
     const count=()=>{$('selectedCount').textContent='선택 '+selected.size+'명 · 회원 '+pickerPeople.filter(p=>p.type==='member'&&selected.has(p.id)).length+'명 / 게스트 '+pickerPeople.filter(p=>p.type==='guest'&&selected.has(p.id)).length+'명';};
     function render(){for(const type of ['member','guest'])$(type+'Tab').setAttribute('aria-pressed',String(active===type));$('choices').innerHTML=visible().map(p=>{const name=pickerNameOf(p),open=lateOpen.has(name),round=Number(lateRounds[name])||0,registered=lateRegistration.has(name);return '<label class="person"><input type="checkbox" value="'+esc(p.id)+'"'+(selected.has(p.id)?' checked':'')+'><span>'+nameHTML(name)+'</span><small>'+seedHTML(p.seed||'미정')+'</small><button type="button" class="late-btn'+(open?' on':'')+'" data-late-name="'+esc(name)+'" aria-expanded="'+open+'" aria-label="'+esc(name)+' 늦참 설정 '+(open?'접기':'펼치기')+'">늦참'+(round?' '+round+'R 제외':'')+(registered?' · 신청늦음':'')+'</button>'+(open?'<div class="late-options" role="group" aria-label="'+esc(name)+' 늦참 설정"><span>앞 라운드 제외</span>'+[1,2,3,4,5].map(n=>'<button type="button" class="late-round'+(round===n?' on':'')+'" data-late-round="'+n+'" data-late-name="'+esc(name)+'" aria-pressed="'+(round===n)+'" aria-label="'+esc(name)+' 앞 '+n+'라운드 제외">'+n+'</button>').join('')+'<button type="button" class="late-registration'+(registered?' on':'')+'" data-late-registration="'+esc(name)+'" aria-pressed="'+registered+'">신청늦음</button></div>':'')+'</label>';}).join('')||'<p>검색 결과가 없습니다.</p>';count();}
@@ -570,7 +627,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     $('generate').onclick=async()=>{
       if(generating)return;
       let title;
-      try{title=existing?$('newTitle').value.trim()||stamp():scheduleInfo.read().title;}catch(error){$('pickerError').textContent=error.message;return;}
+      try{title=existing?(!EDITOR?existing.title:($('newTitle').value.trim()||stamp())):scheduleInfo.read().title;}catch(error){$('pickerError').textContent=error.message;return;}
       $('pickerError').textContent='';
       const c=Number($('courts').value),r=Number($('rounds').value),picked=pickerPeople.filter(p=>selected.has(p.id));
       if(picked.length<4)return alert('참가자 4명 이상을 선택해주세요.');
@@ -581,11 +638,12 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       try{
       const current=new Map((await getPeople(true)).map(p=>[p.id,p]));
       if(!active())return;
+      if(!EDITOR){const session=await validateMemberSchedule(existing);if(!active())return;if(session.today!==memberSession.today)throw Error('날짜가 변경되었습니다. 대진 만들기를 다시 시작해주세요.');}
       if(picked.length!==selected.size||picked.some(p=>!selected.has(p.id))||c!==Number($('courts').value)||r!==Number($('rounds').value))throw Error('참가자나 코트 설정이 바뀌었습니다. 대진 만들기를 다시 눌러주세요.');
-      if(title!==(existing?$('newTitle').value.trim()||stamp():scheduleInfo.read().title))throw Error('대진 날짜·장소·시간이 바뀌었습니다. 다시 만들기를 눌러주세요.');
+      if(title!==(existing?(!EDITOR?existing.title:($('newTitle').value.trim()||stamp())):scheduleInfo.read().title))throw Error('대진 날짜·장소·시간이 바뀌었습니다. 다시 만들기를 눌러주세요.');
       const roster=picked.map(p=>{const name=pickerNameOf(p),fresh=current.get(p.id);if(!fresh&&!p.adhoc||fresh&&(fresh.name!==p.name||fresh.type!==p.type))throw Error('회원 명단이 변경되었습니다. 참가자 선택창을 다시 열어주세요.');const points=Number((fresh||p).points);if(!Number.isFinite(points))throw Error(name+'님의 시드 점수를 확인해주세요.');return {id:p.id,name,type:p.type,points,operator:fresh?Boolean(fresh.is_operator):OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name)};});
       const schedule=scheduleTools.generate(roster,c,r,methods);
-      const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title,names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
+      const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={...existing,id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title,scheduleDate:existing?existing.scheduleDate:scheduleInfo.read().scheduleDate,names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
       dialog.close();editSchedule(d);dirty=true;window.scrollTo(0,0);
       }catch(error){if(active())$('pickerError').textContent=error.message||'최신 점수를 불러오지 못했습니다. 다시 시도해주세요.';}
       finally{generating=false;if($('generate')===button){button.disabled=false;button.textContent=buttonText;}}

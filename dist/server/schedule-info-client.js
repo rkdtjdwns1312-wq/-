@@ -1,7 +1,7 @@
 // Serialized into the page: keep all helpers inside this factory.
-export function createScheduleInfo({root,esc,now=Date.now()}){
+export function createScheduleInfo({root,esc,now=Date.now(),fixedDate=null}){
   const today=new Date(now+9*3600000).toISOString().slice(0,10);
-  let year=Number(today.slice(0,4)),month=Number(today.slice(5,7)),date='',panel='';
+  let year=Number(today.slice(0,4)),month=Number(today.slice(5,7)),date=fixedDate||'',panel='';
   const $=id=>root.querySelector('#'+id),pad=n=>String(n).padStart(2,'0');
   const utc=(y,m,d)=>{const value=new Date(0);value.setUTCFullYear(y,m-1,d);value.setUTCHours(0,0,0,0);return value;};
   const weekdays=['일','월','화','수','목','금','토'];
@@ -38,6 +38,7 @@ export function createScheduleInfo({root,esc,now=Date.now()}){
     root.querySelectorAll('[data-schedule-date]').forEach(button=>button.onclick=()=>{date=button.dataset.scheduleDate;show('');update();$('scheduleDateButton').focus();});
   }
   for(const name of ['Date','Venue','Time'])$('schedule'+name+'Button').onclick=()=>show(panel===name?'':name);
+  if(fixedDate)$('scheduleDateButton').disabled=true;
   $('scheduleVenue').oninput=update;$('scheduleHour').onchange=update;
   $('scheduleVenue').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();show('');$('scheduleVenueButton').focus();}};
   root.addEventListener('keydown',event=>{if(event.key==='Escape'&&panel){const name=panel;event.preventDefault();event.stopPropagation();show('');$('schedule'+name+'Button').focus();}});
@@ -47,7 +48,7 @@ export function createScheduleInfo({root,esc,now=Date.now()}){
     if(!date){show('Date');throw Error('대진 날짜를 선택해주세요.');}
     if(!venue||venue.length>60||/[\u0000-\u001f\u007f]/.test(venue)){show('Venue');throw Error('장소를 1~60자로 입력해주세요.');}
     if(!/^(?:[01]\d|2[0-3])$/.test(hour)){show('Time');throw Error('시작시간을 24시간제로 선택해주세요.');}
-    return {title:dateLabel()+' '+venue+' '+Number(hour)+'시'};
+    return {title:dateLabel()+' '+venue+' '+Number(hour)+'시',scheduleDate:date};
   }
   return {read};
 }
