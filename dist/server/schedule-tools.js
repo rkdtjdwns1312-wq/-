@@ -1,6 +1,14 @@
 // This factory is also serialized into the browser. Keep it self-contained.
 export function createScheduleTools(){
   const missed=(d,name)=>Object.hasOwn(d.lateRounds||{},name)?Number(d.lateRounds[name])||0:0;
+  const earlyStart=(d,name)=>Object.hasOwn(d.earlyFromRounds||{},name)?d.earlyFromRounds[name]:
+    (d.roster||[]).find(p=>p.name===name)?.earlyFromRound??0;
+  const validateEarly=(d,rounds)=>{
+    for(const name of d.names||[]){const start=earlyStart(d,name);
+      if(!Number.isInteger(start)||start<0||start>rounds)throw Error('조퇴 라운드는 0~'+rounds+' 사이의 정수로 지정해주세요.');
+    }
+  };
+  const departed=(d,name,ri)=>{const start=earlyStart(d,name);return start>0&&ri+1>=start;};
   // The picker sends numbers, but keep direct/server callers consistent when
   // a numeric database value is represented as a string.
   const pts=p=>{const value=Number(p.points);return Number.isFinite(value)?value:0;};
@@ -48,11 +56,13 @@ export function createScheduleTools(){
     previousMatches.forEach(match=>addPartnerCounts(pairCount,match));
     return chooseFour(roster4,method,pairCount);
   }
-  function availableNames(d,ri){return d.names.filter(name=>missed(d,name)<=ri);}
+  function availableNames(d,ri){if(Number.isInteger(d.rounds))validateEarly(d,d.rounds);return d.names.filter(name=>missed(d,name)<=ri&&!departed(d,name,ri));}
   function refreshRound(d,ri){
     const r=d.schedule[ri],available=availableNames(d,ri),playing=new Set(r.g.flat());
     r.rest=available.filter(name=>!playing.has(name));
-    r.late=d.names.filter(name=>missed(d,name)>ri);
+    r.late=d.names.filter(name=>missed(d,name)>ri&&!departed(d,name,ri));
+    const early=d.names.filter(name=>departed(d,name,ri));
+    if(early.length||Object.hasOwn(d,'earlyFromRounds'))r.early=early;else delete r.early;
     return r;
   }
   function partnerSummary(schedule){
@@ -192,7 +202,10 @@ export function createScheduleTools(){
     if(!match||!Number.isInteger(si)||si<0||si>=match.length)throw Error('교환할 선수 자리를 확인해주세요.');
     const previous=match[si];
     if(next===previous)return;
-    if(!availableNames(d,ri).includes(next))throw Error('이 라운드에 아직 도착하지 않은 참가자는 넣을 수 없어요.');
+    if(!availableNames(d,ri).includes(next)){
+      if(departed(d,next,ri))throw Error('조퇴 설정으로 이 라운드에는 참가할 수 없는 사람입니다.');
+      throw Error('이 라운드에 아직 도착하지 않은 참가자는 넣을 수 없어요.');
+    }
     // Prefer the visible position in this game. Legacy extra games may contain
     // the same player more than once; never guess which other court to change.
     const positions=[];
@@ -209,27 +222,32 @@ export function createScheduleTools(){
     }
     refreshRound(d,ri);
   }
-  function generate(roster,courts,rounds,methods){
+  function generate(roster,courts,rounds,methods,earlyFromRounds){
     if(!Array.isArray(roster)||roster.length<4||roster.length>200||roster.some(p=>!p||typeof p.id!=='string'||!p.id||typeof p.name!=='string'||!p.name)||new Set(roster.map(p=>p.id)).size!==roster.length||new Set(roster.map(p=>p.name)).size!==roster.length)throw Error('참가자 명단을 확인해주세요.');
     if(!Number.isInteger(courts)||courts<1||courts>20||!Number.isInteger(rounds)||rounds<1||rounds>20)throw Error('코트와 라운드 수를 확인해주세요.');
     if(!Array.isArray(methods))throw Error('라운드 방식을 확인해주세요.');
     for(const p of roster){const late=p.lateRounds??0;if(!Number.isInteger(late)||late<0||late>5)throw Error('늦참은 0~5라운드 사이로 지정해주세요.');}
+    const earlyDraft={names:roster.map(p=>p.name),roster,
+      ...(earlyFromRounds===undefined?{}:{earlyFromRounds})};
+    validateEarly(earlyDraft,rounds);
     const shuffle=a=>{a=[...a];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
     const priority=p=>p.lateRegistration?0:p.type==='guest'?1:p.operator?2:3;
     // Two or more missed rounds exempt guests/operators from further rest,
     // including when they also have the late-registration priority flag.
-    const lateRoleRestExempt=p=>p.lateRounds>=2&&(p.type==='guest'||p.operator);
+    const lateRoleRestExempt=p=>p.lateRounds>=2&&(p.type==='guest'||p.operator)||
+      earlyStart(earlyDraft,p.name)>0&&(p.type==='guest'||p.operator);
     const restCount=new Map(roster.map(p=>[p.id,0])),pairCount=new Map();
     const out=[],adjacentPools=[];let sameIndex=0;
     for(let ri=0;ri<rounds;ri++){
-      const available=roster.filter(p=>(Number(p.lateRounds)||0)<=ri);
-      const late=roster.filter(p=>(Number(p.lateRounds)||0)>ri).map(p=>p.name);
+      const available=roster.filter(p=>(Number(p.lateRounds)||0)<=ri&&!departed(earlyDraft,p.name,ri));
+      const late=roster.filter(p=>(Number(p.lateRounds)||0)>ri&&!departed(earlyDraft,p.name,ri)).map(p=>p.name);
+      const early=roster.filter(p=>departed(earlyDraft,p.name,ri)).map(p=>p.name);
       const cap=Math.min(courts,Math.floor(available.length/4)),restSlots=available.length-cap*4;
       // Each priority participant rests once; ordinary members may rest again,
       // choosing the least-rested first with a shuffled tie break.
       const candidates=shuffle(available).filter(p=>!lateRoleRestExempt(p)&&(priority(p)===3||restCount.get(p.id)===0))
         .sort((a,b)=>priority(a)-priority(b)||(restCount.get(a.id)-restCount.get(b.id)));
-      if(candidates.length<restSlots)throw Error((ri+1)+'라운드: 신청늦음·게스트·운영진의 휴식 1회 제한 또는 늦참 2라운드 이상 운영진·게스트의 추가 휴식 제외 조건으로 대진을 채울 수 없어요. 코트 수를 늘리거나 참가자·라운드 수를 조정해주세요.');
+      if(candidates.length<restSlots)throw Error((ri+1)+'라운드: 휴식 1회 제한 대상(신청 늦음·게스트·운영진 또는 조퇴 설정 게스트·운영진)을 쉬게 하지 않고 대진을 채울 수 없어요. 코트 수를 늘리거나 참가자·라운드 수를 조정해주세요.');
       const resting=candidates.slice(0,restSlots),restIds=new Set(resting.map(p=>p.id));
       resting.forEach(p=>restCount.set(p.id,restCount.get(p.id)+1));
       const playing=available.filter(p=>!restIds.has(p.id)),method=methods[ri]||'random',groups=[];
@@ -247,7 +265,9 @@ export function createScheduleTools(){
         if(method!=='random')addPartnerCounts(pairCount,s);
         return s.map(p=>p.name);
       });
-      out.push({round:ri+1,method,g,rest:resting.map(p=>p.name),late});
+      const round={round:ri+1,method,g,rest:resting.map(p=>p.name),late};
+      if(early.length||earlyFromRounds!==undefined||roster.some(p=>p.earlyFromRound!==undefined))round.early=early;
+      out.push(round);
       if(method==='same')sameIndex++;
     }
     repairPartners(out,roster,adjacentPools);

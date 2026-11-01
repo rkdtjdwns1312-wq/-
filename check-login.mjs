@@ -296,6 +296,9 @@ await runScheduleTitleChecks();
 await runMemberScheduleWriteChecks();
 await runMemberScheduleAccessChecks();
 await import('./check-member-schedule-ui.mjs');
+await import('./check-early-departure.mjs');
+await import('./check-early-departure-ui.mjs');
+await (await import('./check-early-departure-server.mjs')).runEarlyDepartureServerChecks();
 console.log('PASS: correct/incorrect passwords, 5-attempt limit, expiry, origin checks, missing configuration, public secret isolation, existing operator route and unauthenticated write rejection.');
 if(process.argv.includes('--serve')){
   if(process.env.KOKKIRI_HISTORY_FIXTURE==='1'){

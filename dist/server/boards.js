@@ -72,17 +72,23 @@ function validate(d,kind){
   const lateEntries=Object.entries(d.lateRounds||{}).filter(([name])=>d.names.includes(name));
   if(lateEntries.some(([,n])=>!Number.isInteger(n)||n<0||n>5))throw Error('늦참은 0~5라운드 사이로 지정해주세요.');
   const lateRounds=Object.fromEntries(lateEntries.filter(([,n])=>n>0));
+  if(d.earlyFromRounds!=null&&(typeof d.earlyFromRounds!=='object'||Array.isArray(d.earlyFromRounds)))throw Error('조퇴 라운드를 확인해주세요.');
+  const earlyEntries=Object.entries(d.earlyFromRounds||{}).filter(([name])=>d.names.includes(name));
+  if(earlyEntries.some(([,n])=>!Number.isInteger(n)||n<0||n>d.rounds))throw Error('조퇴 시작 라운드는 1~'+d.rounds+'라운드 사이로 지정해주세요.');
+  const earlyFromRounds=Object.fromEntries(earlyEntries.filter(([,n])=>n>0));
   const lateRegistration=Array.isArray(d.lateRegistration)?[...new Set(d.lateRegistration.filter(n=>typeof n==='string'&&d.names.includes(n)))]:[];
   const schedule=d.schedule.map((r,i)=>{
-    const available=scheduleTools.availableNames({names:d.names,lateRounds},i);
+    const available=scheduleTools.availableNames({names:d.names,lateRounds,earlyFromRounds},i);
     if(!r||!Array.isArray(r.g)||(r.g.length===0&&available.length>=4)||r.g.length>100||r.g.some(m=>!Array.isArray(m)||m.length!==4||new Set(m).size!==4))throw Error('대진 구성을 확인해주세요.');
     const playing=r.g.flat();
     if(playing.some(n=>!d.names.includes(n)))throw Error('대진에 명단에 없는 참가자가 있습니다.');
-    if(playing.some(n=>!available.includes(n)))throw Error((i+1)+'라운드에 아직 도착하지 않은 참가자가 있습니다.');
+    if(playing.some(n=>!available.includes(n)))throw Error((i+1)+'라운드에 늦참 또는 조퇴로 참여할 수 없는 참가자가 있습니다.');
     const method=['same','balanced','random'].includes(r.method)?r.method:'balanced';
-    return {round:i+1,method,g:r.g,rest:available.filter(n=>!playing.includes(n)),late:d.names.filter(n=>!available.includes(n))};
+    const early=d.names.filter(n=>Object.hasOwn(earlyFromRounds,n)&&earlyFromRounds[n]<=i+1);
+    return {round:i+1,method,g:r.g,rest:available.filter(n=>!playing.includes(n)),late:d.names.filter(n=>(lateRounds[n]||0)>i&&!early.includes(n)),...(early.length||Object.hasOwn(d,'earlyFromRounds')?{early}:{})};
   });
   const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,lateRounds,lateRegistration,results:cleanResults(d.results,schedule),settledAt:null};
+  if(Object.hasOwn(d,'earlyFromRounds'))base.earlyFromRounds=earlyFromRounds;
   if(Array.isArray(d.mvp))base.mvp=d.mvp.filter(x=>typeof x==='string').slice(0,50);
   if(Array.isArray(d.absent))base.absent=d.absent.filter(x=>typeof x==='string'&&d.names.includes(x)).slice(0,200);
   if(d.scheduleDate!=null){if(!validScheduleDate(d.scheduleDate))throw Error('대진 날짜를 확인해주세요.');base.scheduleDate=d.scheduleDate;}
@@ -134,7 +140,8 @@ async function settleSchedule(db,id,input){
   const addFor=(name,field)=>{const w=whoByName.get(name);if(!w)return;bump(w.t==='m'?deltas:gDeltas,w.id,field);};
   // 운영진이 '출석만 반영'을 선택한 경우에는 일반 출석 제외 정책과 무관하게 실제 참석자에게 +1을 준다.
   // 일반 점수 반영은 토요일 정모 예외를 포함한 attendancePolicy를 따른다.
-  const attended=new Set();if(mode==='attendance'||attendancePolicy(post).eligible)for(const name of post.names){if(absentSet.has(name)||(Object.hasOwn(post.lateRounds||{},name)&&post.lateRounds[name]>=post.rounds))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
+  const everAvailable=new Set(post.schedule.flatMap((_,ri)=>scheduleTools.availableNames(post,ri)));
+  const attended=new Set();if(mode==='attendance'||attendancePolicy(post).eligible)for(const name of post.names){if(absentSet.has(name)||!everAvailable.has(name))continue;const w=whoByName.get(name);if(w&&!attended.has(w.t+w.id)){attended.add(w.t+w.id);addFor(name,'attendance');}}
   const scoredPlayed=new Map(),scoredLost=new Set();
   if(mode==='scored')for(let ri=0;ri<post.schedule.length;ri++){
     if(!isScored(ri))continue;

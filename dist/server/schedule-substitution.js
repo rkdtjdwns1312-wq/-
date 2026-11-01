@@ -59,6 +59,7 @@ export async function substituteSchedule(db,id,input){
   if(match.some(name=>name===label||aliases.has(name)))return json({error:'같은 경기에는 한 회원을 두 번 넣을 수 없습니다.'},400);
   if((post.absent||[]).some(name=>name===label||aliases.has(name)))return json({error:'교체 멤버가 불참자로 지정되어 있습니다. 먼저 불참 지정을 해제해주세요.'},400);
   if([label,...aliases].some(name=>(post.lateRounds?.[name]||0)>ri))return json({error:'교체 멤버는 이 라운드에 아직 늦참 대기 중입니다.'},400);
+  if([label,...aliases].some(name=>Object.hasOwn(post.earlyFromRounds||{},name)&&post.earlyFromRounds[name]>0&&post.earlyFromRounds[name]<=ri+1))return json({error:'교체 멤버는 이 라운드에 조퇴로 제외되어 있습니다.'},400);
   if(index<0){
     if(post.names.includes(label))return json({error:'대진표의 같은 이름이 다른 회원 ID와 연결되어 있습니다. 참가자 정보를 먼저 확인해주세요.'},400);
     if(post.names.length>=200)return json({error:'참가자 명단은 최대 200명입니다. 명단을 확인해주세요.'},400);
