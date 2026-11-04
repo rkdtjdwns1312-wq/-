@@ -91,7 +91,7 @@ async function checkBoardListArrows(){
   };
   const items=[{id:'공지 1',title:'공지 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-1',title:'대진 제목',created_at:'2026-09-19T00:00:00Z',version:1},{id:'schedule-unscored',title:'미반영 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'unscored'},{id:'schedule-attendance',title:'출석 대진',created_at:'2026-09-19T00:00:00Z',version:2,settledAt:'2026-09-19T01:00:00Z',settlementMode:'attendance'}];
   for(const kind of ['notice','schedule']){
-    const h=makeHarness(items),board=compile('board',{app:h.app,crumb:h.crumb,EDITOR:'operator',$:h.$,api:h.api,esc,date:()=> '날짜',message(){},routeToken:1});
+    const h=makeHarness(items),board=compile('board',{app:h.app,crumb:h.crumb,EDITOR:'operator',$:h.$,api:h.api,esc,date:()=> '날짜',meetingTypeBadge:()=>'',message(){},routeToken:1});
     await board(kind,1);
     const html=h.elements.get('postList').innerHTML;
     assert.match(html,new RegExp('href="#post/'+encodeURIComponent('공지 1')+'"'),'board list must preserve encoded notice links');
@@ -112,7 +112,7 @@ async function checkPickerCancelIsolation(){
   const h=dialogHarness(),people=[{id:'m1',name:'회원',type:'member',seed:'A',points:100}];
   const openPicker=compile('openPicker',{
     EDITOR:'operator',getPeople:async()=>people,message(){},people,dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
-    crypto:{randomUUID:()=> 'adhoc-id'},scheduleTools:{generate(){return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
+    crypto:{randomUUID:()=> 'adhoc-id'},scheduleTools:{generate(){return [];},},createScheduleInfo:()=>({read:()=>({title:'테스트',scheduleDate:'2026-09-19',meetingType:'정모'})}),OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,routeToken:1,
   });
   await openPicker(null);
   h.$('newGuestName').value='취소한 게스트';
@@ -126,7 +126,7 @@ async function checkPickerLocalNamesAndNavigation(){
     const h=dialogHarness(),load=deferred();
     const picker=compilePicker({
       EDITOR:'operator',getPeople:()=>load.promise,message(){},people:[],dialog:h.dialog,$:h.$,esc,nameHTML:esc,seedHTML:esc,
-      crypto:{randomUUID:()=> 'adhoc-id'},scheduleTools:{generate(){return [];},},OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,
+      crypto:{randomUUID:()=> 'adhoc-id'},scheduleTools:{generate(){return [];},},createScheduleInfo:()=>({read:()=>({title:'테스트',scheduleDate:'2026-09-19',meetingType:'정모'})}),OPERATORS:new Set(),confirm:()=>true,alert(){},window:{scrollTo(){}},stamp:()=>'',editSchedule(){},dirty:false,
     });
     const pending=picker.openPicker(null);picker.navigate();load.resolve();await pending;
     assert.equal(h.dialog.open,false,'a picker whose people load finishes after navigation must not open on the new page');

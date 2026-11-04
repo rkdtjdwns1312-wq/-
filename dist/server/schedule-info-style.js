@@ -15,6 +15,9 @@ export const scheduleInfoCss=`
 .schedule-info button:focus-visible,.schedule-info input:focus-visible,.schedule-info select:focus-visible{outline:2px solid #168447;outline-offset:2px}
 .schedule-info-panel{margin-top:12px;padding:14px;border:1px solid #dcece1;border-radius:14px;background:#fbfffc}
 .schedule-info-panel label{display:block;margin:0 0 7px;color:#315b40;font-weight:700}
+.schedule-type-options{display:flex;max-width:220px;flex-direction:column;gap:8px}
+.schedule-type-option{width:100%;padding:10px 12px;border:1px solid #cfe3d4;border-radius:9px;background:#fff;color:#245c39;font-weight:800;text-align:left;cursor:pointer}
+.schedule-type-option[aria-checked=true]{border-color:#168447;background:#e8f6ec;color:#0c743a;box-shadow:inset 3px 0 #168447}
 .schedule-calendar{box-sizing:border-box;width:100%;max-width:350px;margin:0 auto 16px;padding:10px;border:1px solid #e0ede3;border-radius:13px;background:#fff}
 .schedule-calendar-nav{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;gap:6px;margin-bottom:8px;text-align:center}
 .schedule-calendar-nav button{width:44px;padding:0;border:1px solid #dcece1;border-radius:9px;background:#f4faf5;color:#245c39;font-size:1.1rem;cursor:pointer}
@@ -35,6 +38,10 @@ export const scheduleInfoCss=`
 .schedule-title-preview{margin:14px 0 0;padding:11px 12px;border-radius:11px;background:#eaf6ed;color:#315b40;overflow-wrap:anywhere}
 .schedule-title-preview p{margin:0;line-height:1.55}
 .schedule-title-preview strong{color:#176337}
+.meeting-type-badge{display:inline-flex;align-items:center;justify-content:center;min-width:0;margin-right:7px;padding:2px 5px;border:1px solid transparent;border-radius:4px;font-size:.7rem;font-weight:900;line-height:1.35;vertical-align:.12em;white-space:nowrap}
+.meeting-type-regular{border-color:#86d5a5;background:#e8faef;color:#08783b}
+.meeting-type-small{border-color:#dfc799;background:#fff5df;color:#805917}
+.meeting-type-flash{border-color:#f3ad9a;background:#fff0ec;color:#ad432b}
 @media(max-width:380px){
   .schedule-calendar-nav{grid-template-columns:36px minmax(0,1fr) 36px;gap:4px}
   .schedule-calendar-nav button{width:36px}

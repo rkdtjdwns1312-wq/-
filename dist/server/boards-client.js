@@ -98,6 +98,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     adItem.onclick=()=>{closeMenu();openLoginDialog('홈페이지관리자 권한','관리자 비밀번호','/api/admin-login',/^\/administrate-[a-zA-Z0-9_-]+$/,'관리자 화면으로',()=>fab.focus());};
   }
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const meetingTypeClasses={정모:'regular',소정모:'small',벙개:'flash'};
+  const meetingTypeBadge=value=>Object.hasOwn(meetingTypeClasses,value)?'<span class="meeting-type-badge meeting-type-'+meetingTypeClasses[value]+'">'+esc(value)+'</span>':'';
   // 운영진(왕관)은 DB(is_operator) 응답으로만 표시한다.
   let OPERATORS=new Set();
   function syncOperators(list){const ms=(list||[]).filter(p=>p.type==='member'||('member_id' in p));if(!ms.length){OPERATORS=new Set();return;}if(ms.some(p=>Object.hasOwn(p,'is_operator')))OPERATORS=new Set(ms.filter(p=>p.is_operator).map(p=>p.name));}
@@ -251,7 +253,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     function renderList(){
       if(token!==routeToken)return;
       $('postList').innerHTML=items.length?items.map(p=>{
-        const link='<a class="post post-notice" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':'<span class="post-label post-label-alt">대진</span>')+'<div class="post-title">'+esc(p.title)+(kind==='schedule'&&p.settledAt?'<span class="settled-tag">'+(p.settlementMode==='unscored'?'미반영마감':p.settlementMode==='attendance'?'출석만 반영':'마감')+'</span>':'')+'</div>'+(kind==='schedule'&&p.settledAt&&Array.isArray(p.mvp)&&p.mvp.length?'<div class="mvp-line"><span class="mvp-medal" aria-hidden="true">🥇</span> <span class="mvp-title">MVP '+esc(p.mvp.join(' '))+'</span></div>':'')+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div></a>';
+        const link='<a class="post post-notice" href="#post/'+encodeURIComponent(p.id)+'"><div>'+(kind==='notice'?'<span class="post-label">공지</span>':'<span class="post-label post-label-alt">대진</span>')+'<div class="post-title">'+(kind==='schedule'?meetingTypeBadge(p.meetingType):'')+esc(p.title)+(kind==='schedule'&&p.settledAt?'<span class="settled-tag">'+(p.settlementMode==='unscored'?'미반영마감':p.settlementMode==='attendance'?'출석만 반영':'마감')+'</span>':'')+'</div>'+(kind==='schedule'&&p.settledAt&&Array.isArray(p.mvp)&&p.mvp.length?'<div class="mvp-line"><span class="mvp-medal" aria-hidden="true">🥇</span> <span class="mvp-title">MVP '+esc(p.mvp.join(' '))+'</span></div>':'')+((EDITOR||kind!=='notice')?'<small>'+esc(date(p.created_at))+(p.version>1?' · 수정됨':'')+'</small>':'')+'</div></a>';
         return titleEditing?'<div class="schedule-list-row">'+link+'<button type="button" data-title-edit="'+esc(p.id)+'" aria-label="'+esc(p.title)+' 제목 수정">제목 수정</button></div>':link;
       }).join(''):'<div class="empty"><img src="/mascot-rest.png" alt="기다리는 콕끼리"><p>아직 등록된 '+(kind==='schedule'?'대진표':'공지사항')+'가 없습니다.</p></div>';
     }
@@ -366,7 +368,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     const actions=editable?'<div class="detail-actions"><button id="editPost">수정하기</button>'+(canEmergencySubstitute?'<button id="emergencySubstitute" class="emergency-substitute">긴급교체</button>':'')+'<button id="deletePost" class="danger">삭제</button></div>':memberEditable?'<div class="detail-actions"><button id="editPost">수정하기</button></div>':((EDITOR&&d.kind==='schedule'&&d.settledAt)?'<div class="detail-actions"><button id="unsettlePost" class="danger">마감 취소</button></div>':'');
     const incompleteRounds=(d.kind==='schedule'&&!d.settledAt)?d.schedule.map((r,ri)=>({n:r.round,done:r.method==='random'||r.g.every((m,mi)=>{if(dVoid(m))return true;const v=d.results&&d.results[ri+'-'+mi];return v==='a'||v==='b';})})).filter(x=>!x.done).map(x=>x.n):[];
     const endBtn=(EDITOR&&d.kind==='schedule'&&!d.settledAt)?'<div class="end-match-wrap"><button id="endMatch" class="primary end-match">대진 마감</button></div>'+(!allScoredDone?'<div class="end-note">아직 승패를 기록하지 않은 대진이 있어요. <b>'+incompleteRounds.join(', ')+'라운드</b>의 결과를 모두 입력해야 점수를 반영하는 <b>예</b>를 누를 수 있습니다. <b>출석만 반영</b> 또는 <b>미반영마감</b>은 지금도 선택할 수 있어요.</div>':''):'';
-    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+esc(d.preTitle||d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">'+(d.settlementMode==='unscored'?'미반영마감 · 시드 미반영':d.settlementMode==='attendance'?'출석만 반영 완료':'점수 반영 완료')+'</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt,roster)+endBtn)+'</article>';
+    app.innerHTML=crumb(d.kind)+'<article class="panel detail"><div class="bar"><div>'+(d.kind==='notice'?'<span class="post-label">공지사항</span>':'')+'<h1>'+(d.kind==='schedule'?meetingTypeBadge(d.meetingType):'')+esc(d.preTitle||d.title)+'</h1>'+((EDITOR||d.kind!=='notice')?'<p class="muted">등록 '+esc(date(d.createdAt))+(d.version>1?' · 수정 '+esc(date(d.updatedAt)):'')+'</p>':'')+(d.settledAt?'<span class="settled-badge">'+(d.settlementMode==='unscored'?'미반영마감 · 시드 미반영':d.settlementMode==='attendance'?'출석만 반영 완료':'점수 반영 완료')+'</span>':'')+'</div>'+actions+'</div>'+(d.kind==='notice'?'<div class="notice-body">'+noticeHTML(d.body)+'</div>':'<div class="schedule-meta"><span class="chip">참가 '+d.names.length+'명</span><span class="chip">'+d.courts+'코트</span><span class="chip">'+d.rounds+'라운드</span></div>'+scheduleHTML(d,false,!d.settledAt,roster)+endBtn)+'</article>';
     if(d.kind==='schedule'&&!d.settledAt){
       app.querySelectorAll('.win-pick:not([disabled])').forEach(btn=>btn.onclick=()=>recordResult(d,btn,token));
       bindProgressControls(d,token);
@@ -629,8 +631,8 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     let generating=false;
     $('generate').onclick=async()=>{
       if(generating)return;
-      let title;
-      try{title=existing?(!EDITOR?existing.title:($('newTitle').value.trim()||stamp())):scheduleInfo.read().title;}catch(error){$('pickerError').textContent=error.message;return;}
+      let title,newScheduleInfo;
+      try{if(existing)title=!EDITOR?existing.title:($('newTitle').value.trim()||stamp());else{newScheduleInfo=scheduleInfo.read();title=newScheduleInfo.title;}}catch(error){$('pickerError').textContent=error.message;return;}
       $('pickerError').textContent='';
       const c=Number($('courts').value),r=Number($('rounds').value),picked=pickerPeople.filter(p=>selected.has(p.id));
       if(picked.length<4)return alert('참가자 4명 이상을 선택해주세요.');
@@ -643,11 +645,13 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       if(!active())return;
       if(!EDITOR){const session=await validateMemberSchedule(existing);if(!active())return;if(session.today!==memberSession.today)throw Error('날짜가 변경되었습니다. 대진 만들기를 다시 시작해주세요.');}
       if(picked.length!==selected.size||picked.some(p=>!selected.has(p.id))||c!==Number($('courts').value)||r!==Number($('rounds').value))throw Error('참가자나 코트 설정이 바뀌었습니다. 대진 만들기를 다시 눌러주세요.');
-      if(title!==(existing?(!EDITOR?existing.title:($('newTitle').value.trim()||stamp())):scheduleInfo.read().title))throw Error('대진 날짜·장소·시간이 바뀌었습니다. 다시 만들기를 눌러주세요.');
+      const currentScheduleInfo=existing?null:scheduleInfo.read();
+      if(title!==(existing?(!EDITOR?existing.title:($('newTitle').value.trim()||stamp())):currentScheduleInfo.title)||!existing&&(newScheduleInfo.scheduleDate!==currentScheduleInfo.scheduleDate||newScheduleInfo.meetingType!==currentScheduleInfo.meetingType))throw Error('모임종류·날짜·장소·시간이 바뀌었습니다. 다시 만들기를 눌러주세요.');
       const roster=picked.map(p=>{const name=pickerNameOf(p),fresh=current.get(p.id);if(!fresh&&!p.adhoc||fresh&&(fresh.name!==p.name||fresh.type!==p.type))throw Error('회원 명단이 변경되었습니다. 참가자 선택창을 다시 열어주세요.');const points=Number((fresh||p).points);if(!Number.isFinite(points))throw Error(name+'님의 시드 점수를 확인해주세요.');return {id:p.id,name,type:p.type,points,operator:fresh?Boolean(fresh.is_operator):OPERATORS.has(p.name),lateRounds:Number(lateRounds[name])||0,lateRegistration:lateRegistration.has(name),earlyFromRound:Number(earlyFromRounds[name])||0};});
       const savedEarlyFromRounds=Object.fromEntries(roster.filter(x=>x.earlyFromRound).map(x=>[x.name,x.earlyFromRound]));
       const schedule=scheduleTools.generate(roster,c,r,methods,savedEarlyFromRounds);
-      const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={...existing,id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title,scheduleDate:existing?existing.scheduleDate:scheduleInfo.read().scheduleDate,names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,earlyFromRounds:savedEarlyFromRounds,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
+      const names=roster.map(x=>x.name),savedLateRounds=Object.fromEntries(roster.filter(x=>x.lateRounds).map(x=>[x.name,x.lateRounds])),savedLateRegistration=roster.filter(x=>x.lateRegistration).map(x=>x.name),d={...existing,id:existing?.id||crypto.randomUUID(),kind:'schedule',version:existing?.version||0,title,scheduleDate:existing?existing.scheduleDate:newScheduleInfo.scheduleDate,names,participantIds:picked.map(p=>p.id),courts:c,rounds:r,schedule,lateRounds:savedLateRounds,lateRegistration:savedLateRegistration,earlyFromRounds:savedEarlyFromRounds,results:{},absent:Array.isArray(existing?.absent)?existing.absent:[]};
+      if(!existing)d.meetingType=newScheduleInfo.meetingType;
       dialog.close();editSchedule(d);dirty=true;window.scrollTo(0,0);
       }catch(error){if(active())$('pickerError').textContent=error.message||'최신 점수를 불러오지 못했습니다. 다시 시도해주세요.';}
       finally{generating=false;if($('generate')===button){button.disabled=false;button.textContent=buttonText;}}

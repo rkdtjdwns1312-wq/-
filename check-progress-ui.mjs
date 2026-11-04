@@ -23,7 +23,7 @@ function harness(){
     const clearInterval=id=>timers.delete(id);
     const stopPoll=()=>{if(pollTimer){clearInterval(pollTimer);pollTimer=null;}};
     const app={get innerHTML(){return html;},set innerHTML(value){html=value;renders++;},querySelector:()=>null,querySelectorAll:()=>[]};
-    const $=()=>null,crumb=()=>'',esc=s=>String(s??''),date=s=>String(s??''),scheduleHTML=(d,editing,showResults,roster)=>{rosterSize=Array.isArray(roster)?roster.length:-1;return '<matches />';};
+    const $=()=>null,crumb=()=>'',esc=s=>String(s??''),date=s=>String(s??''),meetingTypeBadge=()=>'',scheduleHTML=(d,editing,showResults,roster)=>{rosterSize=Array.isArray(roster)?roster.length:-1;return '<matches />';};
     const message=(text,error)=>messages.push({text,error});
     let peopleImpl=async()=>[];
     const getPeople=force=>peopleImpl(force);

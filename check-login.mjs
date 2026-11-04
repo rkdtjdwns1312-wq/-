@@ -50,6 +50,7 @@ const login=(password,headers={})=>worker.fetch(new Request(origin+'/api/operato
 new Function('return ('+client.toString()+')');
 assert.ok(client.toString().includes('id="addGuest"')&&client.toString().includes('adhoc'),'openPicker에 즉석 게스트 추가 기능이 있어야 합니다');
 assert.ok(client.toString().includes('id="deletePost"'),'상세 화면에 삭제 버튼이 있어야 합니다');
+assert.ok(client.toString().includes('meetingTypeBadge(p.meetingType)')&&client.toString().includes('d.meetingType=newScheduleInfo.meetingType'),'새 대진의 모임종류는 목록 배지와 저장 데이터로 연결되어야 합니다');
 assert.ok(client.toString().includes('personEditForm')&&client.toString().includes('/api/people/update')&&client.toString().includes('/api/people/history'),'운영진 사람 정보 수정·변경 이력 UI가 있어야 합니다');
 const noticeStart=client.toString().indexOf('function noticeHTML'),noticeEnd=client.toString().indexOf('let people',noticeStart),renderNotice=new Function('esc',client.toString().slice(noticeStart,noticeEnd)+';return noticeHTML;')(s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'));
 const noticeRendered=renderNotice('1. 첫 제목\n[소제목]\n🔴 쿠폰 누락자 및 미지급자\n2. 둘째 제목\n🔵 강조 메모\n<script>alert(1)</script>');
@@ -66,6 +67,7 @@ assert.ok(html.includes('운영진권한'));assert.ok(!html.includes(env.OPERATO
 assert.ok(html.includes('콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일'));
 assert.ok(html.includes('.days-together strong{color:#03a84e'));
 assert.ok(html.includes('Intl.DateTimeFormat'));
+assert.ok(html.includes('id="scheduleTypeButton"')&&html.includes("const meetingTypes=['정모','소정모','벙개']")&&html.includes('.meeting-type-badge'),'새 대진 모임종류 선택과 제목 배지 스타일이 페이지에 포함되어야 합니다');
 assert.ok(!html.includes('<nav class="operator-nav"'),'public pages must not render operator navigation');
 const operatorHtml=await (await worker.fetch(new Request(origin+'/operate-'+env.EDITOR_KEY),env)).text();
 assert.ok(operatorHtml.includes('<nav class="operator-nav"'),'operator pages must render the persistent navigation');
@@ -121,6 +123,9 @@ assert.equal((await put(0,schedule)).status,200);schedule.version=1;schedule.res
 assert.equal((await put(settledData.version,{...schedule,version:settledData.version,settledAt:settledData.settledAt})).status,409);
 const delSchedule={...schedule,id:'delete-test',version:0,settledAt:null,results:{}};
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/delete-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:0,operation:crypto.randomUUID(),data:delSchedule})}),env)).status,200);
+const legacyLike=(await (await worker.fetch(new Request(origin+'/api/posts/delete-test'),env)).json()).data;assert.equal(Object.hasOwn(legacyLike,'meetingType'),false,'기존 대진과 같은 무표시 데이터에는 모임종류를 자동 추가하지 않아야 합니다');
+const invalidMeetingType={...delSchedule,id:'invalid-meeting-type',meetingType:'회식'};
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/invalid-meeting-type',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version:0,operation:crypto.randomUUID(),data:invalidMeetingType})}),env)).status,400);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/delete-test',{method:'DELETE'}),env)).status,403);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/delete-test',{method:'DELETE',headers:{'x-kokkiri-editor':env.EDITOR_KEY}}),env)).status,200);
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/delete-test'),env)).status,404);
@@ -129,7 +134,7 @@ assert.equal((await worker.fetch(new Request(origin+'/api/posts/ranking-test',{m
 assert.equal((await worker.fetch(new Request(origin+'/api/posts/legacy-schedule'),env)).status,404);
 assert.ok(!((await (await worker.fetch(new Request(origin+'/api/posts?kind=schedule'),env)).json()).items.some(p=>p.id==='legacy-schedule')));
 // 요청 037·038·039: 라운드 방식 저장, 회원(공개) 결과 기록, 랜덤 라운드 제외 정산, MVP
-const wave2={id:'wave2-test',kind:'schedule',version:0,title:'웨이브2 테스트',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:2,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구']],rest:[]},{round:2,method:'random',g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
+const wave2={id:'wave2-test',kind:'schedule',version:0,title:'웨이브2 테스트',meetingType:'정모',names:['시오','구구','구름','백구'],participantIds:['member-10','member-17','member-16','member-18'],courts:1,rounds:2,schedule:[{round:1,method:'balanced',g:[['시오','구구','구름','백구']],rest:[]},{round:2,method:'random',g:[['시오','구구','구름','백구']],rest:[]}],results:{}};
 attendanceFixture(wave2);
 const putW2=(version,data)=>worker.fetch(new Request(origin+'/api/posts/wave2-test',{method:'PUT',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({kind:'schedule',version,operation:crypto.randomUUID(),data})}),env);
 const postResult=body=>worker.fetch(new Request(origin+'/api/posts/wave2-test/result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),env);
@@ -140,6 +145,7 @@ const afterCreate=(await (await worker.fetch(new Request(origin+'/api/rankings')
 assert.equal(sioAC.attendance,1);assert.equal(sioAC.wins,1);assert.equal(sioAC.losses,0);assert.equal(sioAC.points,101);
 assert.equal(sioAC.previous_points,99);assert.equal(sioAC.points-sioAC.previous_points,2);
 const w2got=await getW2();assert.equal(w2got.schedule[0].method,'balanced');assert.equal(w2got.schedule[1].method,'random');
+assert.equal(w2got.meetingType,'정모');
 assert.equal((await postResult({key:'1-0',winner:'a'})).status,400);
 assert.equal((await postResult({key:'0-0',winner:'x'})).status,400);
 assert.equal((await postResult({key:'0-0',winner:'a'})).status,200);
@@ -158,6 +164,7 @@ assert.equal(mvpApi.id,'wave2-test');assert.deepEqual([...mvpApi.mvp].sort(),['�
 // 요청 083: 목록에서 MVP를 표시하므로 상세와 같은 명단을 배열로 반환한다.
 const w2List=(await (await worker.fetch(new Request(origin+'/api/posts?kind=schedule'),env)).json()).items.find(p=>p.id==='wave2-test');
 assert.equal(w2List.title,'웨이브2 테스트');assert.equal(w2List.settledAt,w2data.settledAt);assert.deepEqual(w2List.mvp,w2data.mvp);
+assert.equal(w2List.meetingType,'정모');
 assert.equal(Object.hasOwn(w2List,'mvp_json'),false);
 const noticeMvpList=(await (await worker.fetch(new Request(origin+'/api/posts?kind=notice'),env)).json()).items;
 assert.ok(noticeMvpList.length>0);assert.ok(noticeMvpList.every(p=>Array.isArray(p.mvp)&&p.mvp.length===0));

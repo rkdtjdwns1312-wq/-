@@ -36,9 +36,9 @@ function harness({editor='operator',settledAt=null}={}){
   };
   const currentDetail=(id,token)=>token===routeToken&&!draft&&location.hash==='#post/'+encodeURIComponent(id);
   const location={hash:'#post/emergency-ui'};
-  const getPeople=async()=>clone(people),scheduleHTML=()=>'<span data-view-round="'+viewRound+'"></span>',crumb=()=>'',esc=value=>String(value??''),date=value=>String(value),message=(text,error=false)=>messages.push({text,error}),startDetailPoll=()=>{},stopPoll=()=>{};
+  const getPeople=async()=>clone(people),scheduleHTML=()=>'<span data-view-round="'+viewRound+'"></span>',crumb=()=>'',esc=value=>String(value??''),date=value=>String(value),meetingTypeBadge=()=>'',message=(text,error=false)=>messages.push({text,error}),startDetailPoll=()=>{},stopPoll=()=>{};
   const applyMatchState=()=>{},applyWin=()=>{},bindProgressControls=()=>{},recordResult=()=>{},recordProgress=()=>{},endMatch=()=>{},unsettlePost=()=>{},editSchedule=()=>{},editNotice=()=>{};
-  const scope=new Function('context',`with(context){${functions};return {detail,openEmergencySubstitute,refreshDetail};}`)({EDITOR:editor,routeToken,detailRead,draft,viewRound,emergencySubstituteOpening:false,app,dialog,$,api,getPeople,scheduleHTML,crumb,esc,date,message,startDetailPoll,stopPoll,currentDetail,applyMatchState,applyWin,bindProgressControls,recordResult,recordProgress,endMatch,unsettlePost,editSchedule,editNotice,location});
+  const scope=new Function('context',`with(context){${functions};return {detail,openEmergencySubstitute,refreshDetail};}`)({EDITOR:editor,routeToken,detailRead,draft,viewRound,emergencySubstituteOpening:false,app,dialog,$,api,getPeople,scheduleHTML,crumb,esc,date,meetingTypeBadge,message,startDetailPoll,stopPoll,currentDetail,applyMatchState,applyWin,bindProgressControls,recordResult,recordProgress,endMatch,unsettlePost,editSchedule,editNotice,location});
   // Functions close over the context fields; expose the values detail needs to mutate.
   const context=scope;
   return {async detail(){await context.detail(server.id,1);},html:()=>app.innerHTML,button:id=>$(id),dialog,field:id=>$(id),calls,messages,setConflict(value){conflict=value;},server:()=>server};

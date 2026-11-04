@@ -1,28 +1,35 @@
 // Serialized into the page: keep all helpers inside this factory.
 export function createScheduleInfo({root,esc,now=Date.now(),fixedDate=null}){
   const today=new Date(now+9*3600000).toISOString().slice(0,10);
-  let year=Number(today.slice(0,4)),month=Number(today.slice(5,7)),date=fixedDate||'',panel='';
+  let year=Number(today.slice(0,4)),month=Number(today.slice(5,7)),date=fixedDate||'',meetingType='',panel='';
   const $=id=>root.querySelector('#'+id),pad=n=>String(n).padStart(2,'0');
   const utc=(y,m,d)=>{const value=new Date(0);value.setUTCFullYear(y,m-1,d);value.setUTCHours(0,0,0,0);return value;};
   const weekdays=['일','월','화','수','목','금','토'];
+  const meetingTypes=['정모','소정모','벙개'];
   const dateLabel=()=>{if(!date)return '';const [y,m,d]=date.split('-').map(Number);return m+'월 '+d+'일('+weekdays[utc(y,m,d).getUTCDay()]+')';};
-  root.innerHTML='<section class="schedule-info" aria-labelledby="scheduleInfoTitle"><h3 id="scheduleInfoTitle">대진 날짜와 장소</h3><div class="schedule-info-actions"><button type="button" id="scheduleDateButton" aria-expanded="false" aria-controls="scheduleDatePanel">날짜 선택하기</button><button type="button" id="scheduleVenueButton" aria-expanded="false" aria-controls="scheduleVenuePanel">장소 입력하기</button><button type="button" id="scheduleTimeButton" aria-expanded="false" aria-controls="scheduleTimePanel">시작시간</button></div><div id="scheduleDatePanel" class="schedule-info-panel" hidden><div id="scheduleCalendar" class="schedule-calendar"></div></div><div id="scheduleVenuePanel" class="schedule-info-panel" hidden><label for="scheduleVenue">장소<input id="scheduleVenue" type="text" maxlength="60" placeholder="예: 중앙체육관" autocomplete="off"></label></div><div id="scheduleTimePanel" class="schedule-info-panel" hidden><div class="schedule-time-fields"><label for="scheduleHour">시 (24시간제)<select id="scheduleHour" aria-label="시 (24시간제)"><option value="">시간 선택</option>'+Array.from({length:24},(_,n)=>'<option value="'+pad(n)+'">'+n+'시</option>').join('')+'</select></label></div></div><p class="schedule-title-preview" aria-live="polite">제목 미리보기<br><strong id="scheduleTitlePreview"></strong></p></section>';
+  root.innerHTML='<section class="schedule-info" aria-labelledby="scheduleInfoTitle"><h3 id="scheduleInfoTitle">모임종류·날짜·장소</h3><div class="schedule-info-actions"><button type="button" id="scheduleTypeButton" aria-expanded="false" aria-controls="scheduleTypePanel">모임종류</button><button type="button" id="scheduleDateButton" aria-expanded="false" aria-controls="scheduleDatePanel">날짜 선택하기</button><button type="button" id="scheduleVenueButton" aria-expanded="false" aria-controls="scheduleVenuePanel">장소 입력하기</button><button type="button" id="scheduleTimeButton" aria-expanded="false" aria-controls="scheduleTimePanel">시작시간</button></div><div id="scheduleTypePanel" class="schedule-info-panel" hidden><div class="schedule-type-options" role="radiogroup" aria-label="모임종류">'+meetingTypes.map((value,index)=>'<button type="button" class="schedule-type-option" id="scheduleTypeOption'+index+'" data-meeting-type="'+esc(value)+'" role="radio" aria-checked="false" tabindex="'+(index?-1:0)+'">'+esc(value)+'</button>').join('')+'</div></div><div id="scheduleDatePanel" class="schedule-info-panel" hidden><div id="scheduleCalendar" class="schedule-calendar"></div></div><div id="scheduleVenuePanel" class="schedule-info-panel" hidden><label for="scheduleVenue">장소<input id="scheduleVenue" type="text" maxlength="60" placeholder="예: 중앙체육관" autocomplete="off"></label></div><div id="scheduleTimePanel" class="schedule-info-panel" hidden><div class="schedule-time-fields"><label for="scheduleHour">시 (24시간제)<select id="scheduleHour" aria-label="시 (24시간제)"><option value="">시간 선택</option>'+Array.from({length:24},(_,n)=>'<option value="'+pad(n)+'">'+n+'시</option>').join('')+'</select></label></div></div><p class="schedule-title-preview" aria-live="polite">제목 미리보기<br><span id="scheduleTypePreview" class="meeting-type-badge" hidden></span><strong id="scheduleTitlePreview"></strong></p></section>';
+  const typeButtons=[...root.querySelectorAll('[data-meeting-type]')];
   function values(){
     const venue=$('scheduleVenue').value.trim().replace(/\s+/g,' '),hour=$('scheduleHour').value;
     return {venue,hour};
   }
   function update(){
     const {venue,hour}=values();
+    $('scheduleTypeButton').textContent=meetingType||'모임종류';
+    typeButtons.forEach((button,index)=>{const selected=button.dataset.meetingType===meetingType;button.setAttribute('aria-checked',String(selected));button.tabIndex=selected||!meetingType&&index===0?0:-1;});
     $('scheduleDateButton').textContent=dateLabel()||'날짜 선택하기';
     $('scheduleTimeButton').textContent=hour?Number(hour)+'시':'시작시간';
-    $('scheduleTitlePreview').textContent=date&&venue&&hour?dateLabel()+' '+venue+' '+Number(hour)+'시':'날짜·장소·시작시간을 선택해주세요.';
+    $('scheduleTypePreview').hidden=!meetingType;$('scheduleTypePreview').textContent=meetingType;
+    $('scheduleTypePreview').className='meeting-type-badge meeting-type-'+(meetingType==='정모'?'regular':meetingType==='소정모'?'small':'flash');
+    $('scheduleTitlePreview').textContent=meetingType&&date&&venue&&hour?dateLabel()+' '+venue+' '+Number(hour)+'시':'모임종류·날짜·장소·시작시간을 선택해주세요.';
   }
   function show(next){
     panel=next;
-    for(const name of ['Date','Venue','Time']){
+    for(const name of ['Type','Date','Venue','Time']){
       $( 'schedule'+name+'Panel').hidden=next!==name;
       $( 'schedule'+name+'Button').setAttribute('aria-expanded',String(next===name));
     }
+    if(next==='Type')(typeButtons.find(button=>button.dataset.meetingType===meetingType)||typeButtons[0]).focus();
     if(next==='Date'){if(date){year=Number(date.slice(0,4));month=Number(date.slice(5,7));}calendar();}
     if(next==='Venue')$('scheduleVenue').focus();
     if(next==='Time')$('scheduleHour').focus();
@@ -37,7 +44,8 @@ export function createScheduleInfo({root,esc,now=Date.now(),fixedDate=null}){
     $('scheduleNextMonth').onclick=()=>{if(year===9999&&month===12)return;if(++month===13){month=1;year++;}calendar();$('scheduleNextMonth').focus();};
     root.querySelectorAll('[data-schedule-date]').forEach(button=>button.onclick=()=>{date=button.dataset.scheduleDate;show('');update();$('scheduleDateButton').focus();});
   }
-  for(const name of ['Date','Venue','Time'])$('schedule'+name+'Button').onclick=()=>show(panel===name?'':name);
+  for(const name of ['Type','Date','Venue','Time'])$('schedule'+name+'Button').onclick=()=>show(panel===name?'':name);
+  typeButtons.forEach((button,index)=>{button.onclick=()=>{meetingType=button.dataset.meetingType;show('');update();$('scheduleTypeButton').focus();};button.onkeydown=event=>{const moves={ArrowUp:-1,ArrowLeft:-1,ArrowDown:1,ArrowRight:1};if(!Object.hasOwn(moves,event.key))return;event.preventDefault();const next=typeButtons[(index+moves[event.key]+typeButtons.length)%typeButtons.length];meetingType=next.dataset.meetingType;update();next.focus();};});
   if(fixedDate)$('scheduleDateButton').disabled=true;
   $('scheduleVenue').oninput=update;$('scheduleHour').onchange=update;
   $('scheduleVenue').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();show('');$('scheduleVenueButton').focus();}};
@@ -45,10 +53,11 @@ export function createScheduleInfo({root,esc,now=Date.now(),fixedDate=null}){
   update();
   function read(){
     const {venue,hour}=values();
+    if(!meetingTypes.includes(meetingType)){show('Type');throw Error('모임종류를 선택해주세요.');}
     if(!date){show('Date');throw Error('대진 날짜를 선택해주세요.');}
     if(!venue||venue.length>60||/[\u0000-\u001f\u007f]/.test(venue)){show('Venue');throw Error('장소를 1~60자로 입력해주세요.');}
     if(!/^(?:[01]\d|2[0-3])$/.test(hour)){show('Time');throw Error('시작시간을 24시간제로 선택해주세요.');}
-    return {title:dateLabel()+' '+venue+' '+Number(hour)+'시',scheduleDate:date};
+    return {title:dateLabel()+' '+venue+' '+Number(hour)+'시',scheduleDate:date,meetingType};
   }
   return {read};
 }

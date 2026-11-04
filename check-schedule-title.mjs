@@ -72,7 +72,7 @@ async function renderedIntegration(h){
     const args=new Function('return '+script.replace('('+client.toString()+')','((...args)=>args)'))();
     assert.equal(args.length,10);assert.equal(args[0],operator?h.env.EDITOR_KEY:'');assert.equal(args[4],operator);
     assert.equal(typeof args[9],'function');assert.equal(args[9].toString(),createScheduleInfo.toString());
-    assert.ok(args[9].toString().includes('textContent=date&&venue&&hour'),'generated title preview uses text, not HTML');
+    assert.ok(args[9].toString().includes("$('scheduleTitlePreview').textContent=meetingType&&date&&venue&&hour"),'generated title preview uses text, not HTML');
     if(!operator)assert.ok(!html.includes(h.env.EDITOR_KEY),'public page never exposes the runtime operator key');
   }
 }

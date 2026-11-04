@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createScheduleInfo } from './dist/server/schedule-info-client.js';
 
 class Element {
-  constructor(id='') { this.id=id; this.attributes={}; this.hidden=false; this.value=''; this.textContent=''; this._innerHTML=''; this.onclick=null; this.oninput=null; this.onchange=null; this.onkeydown=null; this.dataset={}; this.options=[]; this.focused=false; }
+  constructor(id='') { this.id=id; this.attributes={}; this.hidden=false; this.value=''; this.textContent=''; this.className=''; this._innerHTML=''; this.onclick=null; this.oninput=null; this.onchange=null; this.onkeydown=null; this.dataset={}; this.options=[]; this.focused=false; }
   setAttribute(name,value){this.attributes[name]=String(value);}
   getAttribute(name){return this.attributes[name]??null;}
   focus(){this.root.activeElement=this;}
@@ -12,13 +12,15 @@ class Element {
 }
 
 class Root extends Element {
-  constructor(){super('root');this.root=this;this.elements=new Map();this.listeners={};this.activeElement=null;this.calendarDates=[];}
+  constructor(){super('root');this.root=this;this.elements=new Map();this.listeners={};this.activeElement=null;this.calendarDates=[];this.meetingTypeOptions=[];}
   get innerHTML(){return this._innerHTML??'';}
   set innerHTML(html){this._innerHTML=html;this.parseRoot(html);}
   make(id){let el=this.elements.get(id);if(!el){el=new Element(id);el.root=this;this.elements.set(id,el);}return el;}
   parseRoot(html){for(const [,id] of html.matchAll(/\bid="([^"]+)"/g)){const el=this.make(id);if(id==='scheduleVenue')el.maxLength=60;}
-    for(const id of ['scheduleDatePanel','scheduleVenuePanel','scheduleTimePanel'])this.make(id).hidden=true;
-    for(const id of ['scheduleDateButton','scheduleVenueButton','scheduleTimeButton'])this.make(id).setAttribute('aria-expanded','false');
+    for(const id of ['scheduleTypePanel','scheduleDatePanel','scheduleVenuePanel','scheduleTimePanel'])this.make(id).hidden=true;
+    for(const id of ['scheduleTypeButton','scheduleDateButton','scheduleVenueButton','scheduleTimeButton'])this.make(id).setAttribute('aria-expanded','false');
+    this.meetingTypeOptions=[];
+    for(const match of html.matchAll(/<button type="button" class="schedule-type-option" id="([^"]+)" data-meeting-type="([^"]+)" role="radio" aria-checked="([^"]+)"[^>]*>([^<]+)<\/button>/g)){const el=this.make(match[1]);el.dataset.meetingType=match[2];el.setAttribute('aria-checked',match[3]);el.textContent=match[4];this.meetingTypeOptions.push(el);}
     this.selectMarkup=[...html.matchAll(/<select\b([^>]*)>([\s\S]*?)<\/select>/g)].map(([,attributes,body])=>({attributes,body}));
     for(const {attributes,body} of this.selectMarkup){
       const id=attributes.match(/\bid="([^"]+)"/)?.[1];if(!id)continue;
@@ -31,7 +33,7 @@ class Root extends Element {
     for(const match of html.matchAll(/<button type="button" class="schedule-day([^\"]*)" data-schedule-date="([^"]+)" aria-label="([^"]+)" aria-pressed="([^"]+)"([^>]*)>([^<]+)<\/button>/g)){const el=new Element('');el.root=this;el.className=match[1];el.dataset.scheduleDate=match[2];el.setAttribute('aria-label',match[3]);el.setAttribute('aria-pressed',match[4]);el.textContent=match[6];if(match[5].includes('aria-current="date"'))el.setAttribute('aria-current','date');this.calendarDates.push(el);}
   }
   querySelector(selector){return selector.startsWith('#')?this.elements.get(selector.slice(1))??null:null;}
-  querySelectorAll(selector){return selector==='[data-schedule-date]'?this.calendarDates:[];}
+  querySelectorAll(selector){return selector==='[data-schedule-date]'?this.calendarDates:selector==='[data-meeting-type]'?this.meetingTypeOptions:[];}
   addEventListener(name,fn){this.listeners[name]=fn;}
   key(key){let prevented=false,stopped=false;this.listeners.keydown?.({key,preventDefault(){prevented=true;},stopPropagation(){stopped=true;}});return {prevented,stopped};}
   click(id){const el=this.querySelector('#'+id);assert.ok(el,`missing #${id}`);assert.equal(typeof el.onclick,'function',`#${id} should be clickable`);el.onclick();return el;}
@@ -42,15 +44,20 @@ const esc=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').re
 const makeNow=(year,month,day,hour=12)=>{const d=new Date(0);d.setUTCFullYear(year,month-1,day);d.setUTCHours(hour,0,0,0);return d.getTime();};
 const mount=(date)=>{const root=new Root();const api=createScheduleInfo({root,esc,now:makeNow(...date)});return {root,api};};
 const showDate=root=>root.click('scheduleDateButton');
+const chooseType=(root,index=0)=>{root.click('scheduleTypeButton');root.click('scheduleTypeOption'+index);};
 const choose=(root,date)=>{const day=root.calendarDates.find(el=>el.dataset.scheduleDate===date);assert.ok(day,`calendar should contain ${date}`);day.onclick();};
 const monthLabel=root=>root.querySelector('#scheduleCalendar').innerHTML.match(/<strong[^>]*>([^<]+)<\/strong>/)?.[1];
 
 export function runScheduleInfoUIChecks(){
   // KST date selection starts on the local month, including UTC month/year rollover.
   const {root,api}=mount([2024,1,31,16]);
-  assert.ok(root.innerHTML.includes('<h3 id="scheduleInfoTitle">대진 날짜와 장소</h3>'));
-  assert.deepEqual(['scheduleDateButton','scheduleVenueButton','scheduleTimeButton'].map(id=>root.elements.has(id)),[true,true,true]);
-  const order=['scheduleDateButton','scheduleVenueButton','scheduleTimeButton'].map(id=>root.innerHTML.indexOf(`id="${id}"`));assert.ok(order[0]<order[1]&&order[1]<order[2],'picker buttons should appear date, place, time');
+  assert.ok(root.innerHTML.includes('<h3 id="scheduleInfoTitle">모임종류·날짜·장소</h3>'));
+  assert.deepEqual(['scheduleTypeButton','scheduleDateButton','scheduleVenueButton','scheduleTimeButton'].map(id=>root.elements.has(id)),[true,true,true,true]);
+  const order=['scheduleTypeButton','scheduleDateButton','scheduleVenueButton','scheduleTimeButton'].map(id=>root.innerHTML.indexOf(`id="${id}"`));assert.ok(order[0]<order[1]&&order[1]<order[2]&&order[2]<order[3],'picker buttons should appear type, date, place, time');
+  assert.match(root.innerHTML,/schedule-type-options/);assert.deepEqual(root.meetingTypeOptions.map(el=>el.textContent),['정모','소정모','벙개']);
+  assert.throws(()=>api.read(),/모임종류/);assert.equal(root.querySelector('#scheduleTypePanel').hidden,false);
+  chooseType(root);assert.equal(root.querySelector('#scheduleTypeButton').textContent,'정모');assert.equal(root.querySelector('#scheduleTypePanel').hidden,true);assert.equal(root.querySelector('#scheduleTypeOption0').getAttribute('aria-checked'),'true');assert.equal(root.querySelector('#scheduleTypeOption1').getAttribute('aria-checked'),'false');
+  root.click('scheduleTypeButton');let typeArrowPrevented=false;root.querySelector('#scheduleTypeOption0').onkeydown({key:'ArrowDown',preventDefault(){typeArrowPrevented=true;}});assert.equal(typeArrowPrevented,true);assert.equal(root.querySelector('#scheduleTypeButton').textContent,'소정모');assert.equal(root.activeElement,root.querySelector('#scheduleTypeOption1'));assert.equal(root.querySelector('#scheduleTypePanel').hidden,false);root.click('scheduleTypeOption1');
   showDate(root);assert.equal(monthLabel(root),'2024년 2월');
 
   // Month navigation crosses both sides of a year boundary.
@@ -60,7 +67,7 @@ export function runScheduleInfoUIChecks(){
   jan.root.click('scheduleNextMonth');jan.root.click('scheduleNextMonth');assert.equal(monthLabel(jan.root),'2025년 2월');
 
   // Leap day, selected state, weekday label, and panel close after date choice.
-  const leap=mount([2024,2,8]);showDate(leap.root);assert.equal(leap.root.calendarDates.length,29);
+  const leap=mount([2024,2,8]);chooseType(leap.root,1);showDate(leap.root);assert.equal(leap.root.calendarDates.length,29);
   const leapDay=leap.root.calendarDates.find(el=>el.dataset.scheduleDate==='2024-02-29');assert.match(leapDay.getAttribute('aria-label'),/목요일/);
   choose(leap.root,'2024-02-29');assert.equal(leap.root.querySelector('#scheduleDatePanel').hidden,true);assert.equal(leap.root.querySelector('#scheduleDateButton').textContent,'2월 29일(목)');
   showDate(leap.root);const selected=leap.root.calendarDates.find(el=>el.dataset.scheduleDate==='2024-02-29');assert.match(selected.className,/selected/);assert.equal(selected.getAttribute('aria-pressed'),'true');
@@ -79,8 +86,10 @@ export function runScheduleInfoUIChecks(){
     assert.equal(leap.root.querySelector('#scheduleTimeButton').textContent,label);
     assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,expected);
     assert.equal(leap.api.read().title,expected);
+    assert.equal(leap.api.read().meetingType,'소정모');
   }
-  leap.root.set('scheduleHour','','onchange');assert.throws(()=>leap.api.read(),/시작시간/);assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,'날짜·장소·시작시간을 선택해주세요.');
+  assert.equal(leap.root.querySelector('#scheduleTypePreview').textContent,'소정모');assert.equal(leap.root.querySelector('#scheduleTypePreview').hidden,false);
+  leap.root.set('scheduleHour','','onchange');assert.throws(()=>leap.api.read(),/시작시간/);assert.equal(leap.root.querySelector('#scheduleTitlePreview').textContent,'모임종류·날짜·장소·시작시간을 선택해주세요.');
   leap.root.set('scheduleHour','24','onchange');assert.throws(()=>leap.api.read(),/시작시간/);
   for(const invalid of ['-1','1',' 09','09 ','abc']){leap.root.set('scheduleHour',invalid,'onchange');assert.throws(()=>leap.api.read(),/시작시간/);}
 
@@ -99,7 +108,7 @@ export function runScheduleInfoUIChecks(){
   assert.equal(leap.api.read().title,'2월 29일(목) 체육관 23시');
 
   // A new factory instance starts without a date or place from an earlier instance.
-  const fresh=mount([2024,2,8]);assert.throws(()=>fresh.api.read(),/날짜/);showDate(fresh.root);assert.equal(fresh.root.calendarDates.length,29);
+  const fresh=mount([2024,2,8]);assert.throws(()=>fresh.api.read(),/모임종류/);chooseType(fresh.root,2);assert.throws(()=>fresh.api.read(),/날짜/);showDate(fresh.root);assert.equal(fresh.root.calendarDates.length,29);
   return true;
 }
 

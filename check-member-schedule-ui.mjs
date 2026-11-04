@@ -72,12 +72,14 @@ const poll=pollFactory(async()=>({data:{version:2,settledAt:null,memberScheduleE
 poll({id:'p',kind:'schedule',version:2,settledAt:null,memberScheduleEditable:true},1);await callback();assert.equal(refreshes,1);
 
 const elements=new Map();
-function element(id){if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,hidden:false,setAttribute(){},focus(){},addEventListener(){}});return elements.get(id);}
-const root={set innerHTML(value){this.html=value;},querySelector(selector){return element(selector.slice(1));},querySelectorAll(){return [];},addEventListener(){}};
+function element(id){if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,hidden:false,dataset:{},setAttribute(){},focus(){},addEventListener(){}});return elements.get(id);}
+const meetingOptions=['정모','소정모','벙개'].map((meetingType,index)=>{const option=element('scheduleTypeOption'+index);option.dataset.meetingType=meetingType;return option;});
+const root={set innerHTML(value){this.html=value;},querySelector(selector){return element(selector.slice(1));},querySelectorAll(selector){return selector==='[data-meeting-type]'?meetingOptions:[];},addEventListener(){}};
 const info=createScheduleInfo({root,esc:String,fixedDate:today});
 assert.equal(element('scheduleDateButton').disabled,true);
+meetingOptions[0].onclick();
 element('scheduleVenue').value='체육관';element('scheduleHour').value='18';
-assert.deepEqual(info.read(),{title:'11월 1일(일) 체육관 18시',scheduleDate:today});
+assert.deepEqual(info.read(),{title:'11월 1일(일) 체육관 18시',scheduleDate:today,meetingType:'정모'});
 
 // The member PUT relies on the shared API helper, which adds a header only for a real operator.
 assert.match(actual('persistDraft'),/await validateMemberSchedule\(target,true\)/);

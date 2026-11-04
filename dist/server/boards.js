@@ -50,6 +50,7 @@ const defaultTitle=()=>new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',
 // 옛 단일 대진표(schedules id=1)는 마이그레이션 0004에서 board_posts로 1회 이관했다.
 // 예전에는 조회 때마다 되살렸으나(preserveLegacy) 그 때문에 삭제해도 다시 생겨 제거했다(요청 065).
 const validResult=value=>value==='a'||value==='b';
+const meetingTypes=new Set(['정모','소정모','벙개']);
 const scheduleTools=createScheduleTools();
 function cleanResults(value,schedule){
   const results={};
@@ -92,6 +93,7 @@ function validate(d,kind){
     return {round:i+1,method,g:r.g,rest:available.filter(n=>!playing.includes(n)),late:d.names.filter(n=>(lateRounds[n]||0)>i&&!early.includes(n)),...(early.length||Object.hasOwn(d,'earlyFromRounds')?{early}:{})};
   });
   const base={title:title||defaultTitle(),names:d.names,participantIds:Array.isArray(d.participantIds)?d.participantIds.filter(x=>typeof x==='string').slice(0,200):[],courts:d.courts,rounds:d.rounds,schedule,lateRounds,lateRegistration,results:cleanResults(d.results,schedule),settledAt:null};
+  if(Object.hasOwn(d,'meetingType')){if(!meetingTypes.has(d.meetingType))throw Error('모임종류를 확인해주세요.');base.meetingType=d.meetingType;}
   if(Object.hasOwn(d,'earlyFromRounds'))base.earlyFromRounds=earlyFromRounds;
   if(Array.isArray(d.mvp))base.mvp=d.mvp.filter(x=>typeof x==='string').slice(0,50);
   if(Array.isArray(d.absent))base.absent=d.absent.filter(x=>typeof x==='string'&&d.names.includes(x)).slice(0,200);
@@ -580,7 +582,7 @@ export default {async fetch(request,env){
         const kind=url.searchParams.get('kind');
         if(!['schedule','notice'].includes(kind))return json({error:'게시판을 확인해주세요.'},400);
         const offset=Math.max(0,Math.min(1000000,Math.floor(Number(url.searchParams.get('offset')))||0));
-        const {results}=await env.DB.prepare('SELECT id,kind,COALESCE(json_extract(payload,\'$.preTitle\'),json_extract(payload,\'$.title\')) AS title,json_extract(payload,\'$.settledAt\') AS settledAt,json_extract(payload,\'$.settlementMode\') AS settlementMode,json_extract(payload,\'$.mvp\') AS mvp_json,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
+        const {results}=await env.DB.prepare('SELECT id,kind,COALESCE(json_extract(payload,\'$.preTitle\'),json_extract(payload,\'$.title\')) AS title,json_extract(payload,\'$.meetingType\') AS meetingType,json_extract(payload,\'$.settledAt\') AS settledAt,json_extract(payload,\'$.settlementMode\') AS settlementMode,json_extract(payload,\'$.mvp\') AS mvp_json,created_at,updated_at,version FROM board_posts WHERE kind=? ORDER BY created_at DESC,id DESC LIMIT 31 OFFSET ?').bind(kind,offset).all();
         const items=results.slice(0,30).map(({mvp_json,...post})=>{
           const mvp=mvp_json?JSON.parse(mvp_json):[];
           return {...post,mvp:Array.isArray(mvp)?mvp:[]};
