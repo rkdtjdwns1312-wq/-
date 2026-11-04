@@ -27,8 +27,12 @@ import { ledgerCss } from './ledger-style.js';
 import { ledgerLists } from './ledger-lists.js';
 import { createLedgerLists } from './ledger-lists-client.js';
 import { ledgerListsCss } from './ledger-lists-style.js';
+import { shuttleInventory } from './shuttle-inventory.js';
+import { createShuttleInventory } from './shuttle-inventory-client.js';
+import { shuttleInventoryCss } from './shuttle-inventory-style.js';
 import { createScheduleInfo } from './schedule-info-client.js';
 import { scheduleInfoCss } from './schedule-info-style.js';
+import { readAttendanceHistories } from './attendance-history.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -286,11 +290,11 @@ async function readBackup(env,id){
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
   // One read transaction prevents a backup mixing pre-/post-settlement tables.
-  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','ledger_list_state','ledger_list_revisions'];
-  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','ledger_list_state','ledger_list_revisions','shuttle_inventory_state','shuttle_inventory_revisions'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions});
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions});
   const id='bk-'+crypto.randomUUID(),stored=await backupStorage(data);
   const expired=new Date(Date.now()-31*86400000).toISOString();
   // Publishing the manifest, all chunks and retention cleanup is all-or-nothing.
@@ -304,7 +308,7 @@ async function createBackup(env,kind){
   return {id,at,counts:{notices,schedules,members:members.length,guests:guests.length}};
 }
 function page(editor,admin,member){
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}${ledgerListsCss}${scheduleInfoCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()},${createLedgerLists.toString()},${createScheduleInfo.toString()});</script></body></html>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>콕끼리 · 콕하나로 우리끼리</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8F%B8%3C/text%3E%3C/svg%3E"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"><style>${css}${liveCss}${operatorNavCss}${scoreHistoryCss}${ledgerCss}${ledgerListsCss}${shuttleInventoryCss}${scheduleInfoCss}</style></head><body${editor?' class="operator-layout"':''}><header><a class="brand" href="#home"><span class="brand-name">콕<span class="shuttle" aria-hidden="true">🏸</span>끼리</span><span class="tagline">콕하나로 우리끼리</span></a><span class="access">${admin?'관리자':editor?'운영진':'회원 게시판'}</span></header>${operatorNavHtml(editor)}<main><div id="message" role="status" aria-live="polite"></div><div id="app"></div></main><footer class="days-together">콕끼리 Since 2026.05.08. 우리가 함께한지 <strong id="daysTogether">-</strong>일</footer><dialog id="picker" aria-labelledby="pickerTitle"></dialog><script>(${client.toString()})(${JSON.stringify(editor).replaceAll('<','\\u003c')},${JSON.stringify(admin).replaceAll('<','\\u003c')},${createScheduleTools.toString()},${createLiveView.toString()},${Boolean(member)},${createScoreHistory.toString()},${createLedgerView.toString()},${createLedgerLists.toString()},${createShuttleInventory.toString()},${createScheduleInfo.toString()});</script></body></html>`;
 }
 export default {async fetch(request,env){
   const url=new URL(request.url),path=url.pathname,key=env.EDITOR_KEY;
@@ -318,6 +322,7 @@ export default {async fetch(request,env){
   if(path==='/api/live-courts')return await requireMember(request,env)||liveCourts(request,env);
   if(path==='/api/ledger')return ledger(request,env);
   if(path.startsWith('/api/ledger-lists/'))return ledgerLists(request,env,path.slice('/api/ledger-lists/'.length));
+  if(path==='/api/shuttle-inventory')return shuttleInventory(request,env);
   if(path==='/api/admin-login')return adminLogin(request,env);
   if(images[path])return new Response(Uint8Array.from(atob(images[path]),c=>c.charCodeAt(0)),{headers:{'content-type':'image/png','cache-control':'public,max-age=86400'}});
   if(path.startsWith('/api/')){
@@ -341,9 +346,10 @@ export default {async fetch(request,env){
       if(path==='/api/rankings'&&request.method==='GET'){
         const weekly=await readWeeklyResults(env.DB);
         const {results}=await env.DB.prepare('SELECT member_id,name,points,seed,rank,previous_rank,previous_points,attendance,wins,losses,is_operator,updated_at,rank_movement,rank_protected,floor_protected_at,edit_version,promoted_guest_id FROM ranking_members WHERE hidden=0 ORDER BY rank ASC').all();
+        const attendanceHistories=await readAttendanceHistories(env.DB,results);
         const sourceDate='2026-09-10';
         const updatedDate=weekly.settledAt?new Date(weekly.settledAt).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
-        return json({items:results.map(r=>weekly.member(r)),source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate,displaySettlementId:weekly.scheduleId});
+        return json({items:results.map(r=>{const attendance_dates=attendanceHistories.get(r.member_id)||[];return {...weekly.member(r),cumulative_attendance:attendance_dates.length,attendance_dates};}),source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate,displaySettlementId:weekly.scheduleId});
       }
       if(path==='/api/people'&&request.method==='POST'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 추가할 수 있습니다.'},403);

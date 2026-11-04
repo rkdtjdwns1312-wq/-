@@ -36,6 +36,10 @@ import { runScheduleInfoUIChecks } from './check-schedule-info-ui.mjs';
 import { runScheduleTitleChecks } from './check-schedule-title.mjs';
 import { runMemberScheduleWriteChecks } from './check-member-schedule-writes.mjs';
 import { runMemberScheduleAccessChecks } from './check-member-schedule-access.mjs';
+import { runShuttleInventoryChecks } from './check-shuttle-inventory.mjs';
+import { runShuttleInventoryUIChecks } from './check-shuttle-inventory-ui.mjs';
+import { runAttendanceHistoryChecks } from './check-attendance-history.mjs';
+import { runAttendanceHistoryUIChecks } from './check-attendance-history-ui.mjs';
 const db=new DatabaseSync(':memory:');
 for(const name of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())db.exec(readFileSync(new URL('./drizzle/'+name,import.meta.url),'utf8'));
 const DB={prepare(sql){let params=[];const statement=db.prepare(sql);return {bind(...values){params=values;return this;},async first(){return statement.get(...params)||null;},async run(){return {meta:statement.run(...params)};},async all(){return {results:statement.all(...params)};},execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}};},async batch(statements){db.exec('BEGIN');try{const out=statements.map(s=>s.execute());db.exec('COMMIT');return out;}catch(error){db.exec('ROLLBACK');throw error;}}};
@@ -66,6 +70,7 @@ const operatorHtml=await (await worker.fetch(new Request(origin+'/operate-'+env.
 assert.ok(operatorHtml.includes('<nav class="operator-nav"'),'operator pages must render the persistent navigation');
 assert.ok(operatorHtml.includes('class="operator-layout"'),'operator layout must reserve room for its sidebar');
 const rankings=await worker.fetch(new Request(origin+'/api/rankings'),env);assert.equal(rankings.status,200);const rankingData=await rankings.json();assert.equal(rankingData.items.length,61);assert.equal(rankingData.source,'콕끼리 시드 관리표.xlsx');assert.equal(rankingData.sourceDate,'2026-09-10');assert.equal(rankingData.updatedDate,'2026-09-10');
+assert.ok(rankingData.items.every(row=>Number.isInteger(row.cumulative_attendance)&&Array.isArray(row.attendance_dates)&&row.cumulative_attendance===row.attendance_dates.length),'rankings API must return consistent cumulative attendance dates');
 const sio=rankingData.items.find(row=>row.name==='시오'),newMember=rankingData.items.find(row=>row.name==='호잇');assert.equal(sio.points,99);assert.equal(sio.seed,'B+');assert.equal(newMember.points,123);assert.equal(newMember.seed,'A+');
 // 주밤(115)·로토(104): the sheet said A+, the operator confirmed A on 2026-09-12; seeds follow the points rule everywhere, including the roster shown to operators.
 const jubam=rankingData.items.find(row=>row.name==='주밤'),roto=rankingData.items.find(row=>row.name==='로토');assert.equal(jubam.points,115);assert.equal(jubam.seed,'A');assert.equal(roto.points,104);assert.equal(roto.seed,'A');
@@ -263,6 +268,7 @@ assert.ok(Array.isArray(bkData.settlements)&&bkData.settlements.some(row=>row.sc
 assert.ok(Array.isArray(bkData.rankingEvents)&&bkData.rankingEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 회원 정산 이벤트가 포함되어야 합니다');
 assert.ok(Array.isArray(bkData.guestEvents)&&bkData.guestEvents.some(row=>row.schedule_id==='guest-score'),'백업에 최신 게스트 정산 이벤트가 포함되어야 합니다');
 assert.ok(Array.isArray(bkData.scoreHistory)&&bkData.scoreHistory.some(row=>row.kind==='change'),'백업에 영구 점수 이력도 포함되어야 합니다');
+assert.ok(Array.isArray(bkData.shuttleInventoryState)&&Array.isArray(bkData.shuttleInventoryRevisions),'백업에 콕 재고와 변경 이력이 포함되어야 합니다');
 await worker.scheduled({cron:'0 0 * * 0'},env,{waitUntil(){}});
 assert.ok((await (await worker.fetch(new Request(origin+'/api/backups',{headers:{'x-kokkiri-admin':adminKey}}),env)).json()).items.length>=2);
 await runRankingProtectionChecks();
@@ -295,6 +301,10 @@ await runScheduleInfoUIChecks();
 await runScheduleTitleChecks();
 await runMemberScheduleWriteChecks();
 await runMemberScheduleAccessChecks();
+await runShuttleInventoryChecks({worker,env,origin,db});
+await runShuttleInventoryUIChecks();
+await runAttendanceHistoryChecks();
+await runAttendanceHistoryUIChecks();
 await import('./check-member-schedule-ui.mjs');
 await import('./check-early-departure.mjs');
 await import('./check-early-departure-ui.mjs');

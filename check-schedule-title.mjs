@@ -70,9 +70,9 @@ async function renderedIntegration(h){
     // Evaluate the actual invocation while replacing only the DOM-booting client
     // with a collector, so missing or misordered serialized dependencies fail.
     const args=new Function('return '+script.replace('('+client.toString()+')','((...args)=>args)'))();
-    assert.equal(args.length,9);assert.equal(args[0],operator?h.env.EDITOR_KEY:'');assert.equal(args[4],operator);
-    assert.equal(typeof args[8],'function');assert.equal(args[8].toString(),createScheduleInfo.toString());
-    assert.ok(args[8].toString().includes('textContent=date&&venue&&hour'),'generated title preview uses text, not HTML');
+    assert.equal(args.length,10);assert.equal(args[0],operator?h.env.EDITOR_KEY:'');assert.equal(args[4],operator);
+    assert.equal(typeof args[9],'function');assert.equal(args[9].toString(),createScheduleInfo.toString());
+    assert.ok(args[9].toString().includes('textContent=date&&venue&&hour'),'generated title preview uses text, not HTML');
     if(!operator)assert.ok(!html.includes(h.env.EDITOR_KEY),'public page never exposes the runtime operator key');
   }
 }
