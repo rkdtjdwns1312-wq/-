@@ -290,11 +290,11 @@ async function readBackup(env,id){
 // 요청 074: 백업 스냅샷(공지·대진·시드) 생성 + 1개월 지난 백업 삭제(순차 보관).
 async function createBackup(env,kind){
   // One read transaction prevents a backup mixing pre-/post-settlement tables.
-  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','ledger_list_state','ledger_list_revisions','shuttle_inventory_state','shuttle_inventory_revisions'];
-  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
+  const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','ledger_list_state','ledger_list_revisions','shuttle_inventory_state','shuttle_inventory_revisions','manual_attendance'];
+  const [posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions,manualAttendance]=(await env.DB.batch(tables.map(table=>env.DB.prepare('SELECT * FROM '+table)))).map(result=>result.results);
   const at=new Date().toISOString();
   const notices=posts.filter(p=>p.kind==='notice').length,schedules=posts.filter(p=>p.kind==='schedule').length;
-  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions});
+  const data=JSON.stringify({at,kind,counts:{notices,schedules,members:members.length,guests:guests.length},posts,members,guests,settlements,rankingEvents,guestEvents,peopleChanges,scoreHistory,ledgerState,ledgerRevisions,ledgerListState,ledgerListRevisions,shuttleInventoryState,shuttleInventoryRevisions,manualAttendance});
   const id='bk-'+crypto.randomUUID(),stored=await backupStorage(data);
   const expired=new Date(Date.now()-31*86400000).toISOString();
   // Publishing the manifest, all chunks and retention cleanup is all-or-nothing.

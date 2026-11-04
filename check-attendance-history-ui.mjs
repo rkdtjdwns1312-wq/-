@@ -8,7 +8,7 @@ export async function runAttendanceHistoryUIChecks(){
   assert.ok(source.includes('class="attendance-history-open"')&&source.includes('data-member-id='),'attendance count is an accessible per-member button');
   assert.ok(source.includes('function showAttendanceHistory')&&source.includes('attendance-date-list'),'attendance count opens a vertical date list');
   assert.ok(source.includes("[...row.attendance_dates].sort().reverse()"),'latest attendance date is shown first');
-  assert.ok(source.includes('대진에 실제 편성된 날짜 기준'),'dialog explains the counting rule');
+  assert.ok(source.includes('대진 편성 또는 운영진 확인 날짜 기준'),'dialog explains both schedule and manually confirmed attendance');
   console.log('PASS: seed ranking shows clickable cumulative attendance and a recent-first vertical date dialog.');
 }
 

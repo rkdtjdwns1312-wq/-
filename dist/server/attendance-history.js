@@ -22,9 +22,10 @@ export async function readAttendanceHistories(db,members){
   const aliases=new Map();
   for(const member of members)addAlias(aliases,member.name,member.member_id);
 
-  const [changesResult,postsResult]=await Promise.all([
+  const [changesResult,postsResult,manualResult]=await Promise.all([
     db.prepare('SELECT person_type,person_id,before_name,after_name FROM people_changes').all(),
-    db.prepare("SELECT payload,created_at FROM board_posts WHERE kind='schedule' ORDER BY created_at ASC,id ASC").all()
+    db.prepare("SELECT payload,created_at FROM board_posts WHERE kind='schedule' ORDER BY created_at ASC,id ASC").all(),
+    db.prepare('SELECT attendance_date,person_name FROM manual_attendance ORDER BY attendance_date ASC,person_name ASC').all()
   ]);
   for(const change of changesResult.results||[]){
     const memberId=change.person_type==='member'?byMemberId.get(change.person_id):change.person_type==='guest'?byPromotedGuestId.get(change.person_id):null;
@@ -45,6 +46,10 @@ export async function readAttendanceHistories(db,members){
       if(!memberId){const matches=aliases.get(name);if(matches?.size===1)memberId=[...matches][0];}
       if(memberId)histories.get(memberId)?.add(day);
     }
+  }
+  for(const row of manualResult.results||[]){
+    const name=cleanName(row.person_name),matches=aliases.get(name);
+    if(matches?.size===1)histories.get([...matches][0])?.add(row.attendance_date);
   }
   return new Map([...histories].map(([memberId,days])=>[memberId,[...days].sort()]));
 }

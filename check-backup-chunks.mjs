@@ -33,7 +33,7 @@ export async function runBackupChunkChecks(){
   const create=async()=>{const response=await call('/api/backups','POST');assert.equal(response.status,200,await response.clone().text());return (await response.json()).data;};
   const download=async id=>{const response=await call('/api/backups/'+id);assert.equal(response.status,200,await response.clone().text());assert.equal(response.headers.get('cache-control'),'no-store');assert.match(response.headers.get('content-disposition'),/attachment/);return response.text();};
   const stored=()=>JSON.stringify([db.prepare('SELECT * FROM backups ORDER BY id').all(),db.prepare('SELECT * FROM backup_chunks ORDER BY backup_id,chunk_index').all()]);
-  const source=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions'].map(t=>db.prepare('SELECT * FROM '+t).all()));
+  const source=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','ledger_state','ledger_revisions','manual_attendance'].map(t=>db.prepare('SELECT * FROM '+t).all()));
   async function expectUnavailable(action){const old=console.error;console.error=()=>{};try{assert.equal((await action()).status,503);}finally{console.error=old;}}
   try{
     for(const headers of [{},{'x-kokkiri-editor':env.EDITOR_KEY}]){
@@ -47,7 +47,7 @@ export async function runBackupChunkChecks(){
     assert.equal(await download('legacy-inline'),legacy,'existing downloads retain byte-exact JSON');
     const originalSource=source(),small=await create();assert.equal(source(),originalSource,'backup is read-only for business data');
     const inline=db.prepare('SELECT data FROM backups WHERE id=?').get(small.id).data;
-    assert.equal(await download(small.id),inline);assert.ok(Array.isArray(JSON.parse(inline).ledgerRevisions));
+    assert.equal(await download(small.id),inline);const smallDecoded=JSON.parse(inline);assert.ok(Array.isArray(smallDecoded.ledgerRevisions));assert.equal(smallDecoded.manualAttendance.length,186);
     assert.equal(db.prepare('SELECT count(*) AS n FROM backup_chunks WHERE backup_id=?').get(small.id).n,0,'small new backup stays backward-compatible inline');
 
     const entries=Array.from({length:35},(_,i)=>({id:'memo-'+i,date:'2026-10-25',description:'회비 '+i,income:1000,expense:0,note:'\ufeff'.repeat(4500)+'메모😀\n'}));
@@ -59,6 +59,7 @@ export async function runBackupChunkChecks(){
     assert.ok(byteLength(text)>2000000,'reproduces a valid backup larger than D1 string/row limit');
     assert.equal(source(),beforeLarge);assert.deepEqual(decoded.ledgerState,db.prepare('SELECT * FROM ledger_state').all().map(row=>({...row})));
     assert.deepEqual(decoded.ledgerRevisions,db.prepare('SELECT * FROM ledger_revisions').all().map(row=>({...row})));
+    assert.deepEqual(decoded.manualAttendance,db.prepare('SELECT * FROM manual_attendance').all().map(row=>({...row})),'manual attendance backup preserves every field');
     assert.deepEqual(JSON.parse(decoded.ledgerState[0].payload).entries,entries,'Korean, emoji and multiline notes round-trip without corruption');
     assert.ok(!text.includes(env.EDITOR_KEY)&&!text.includes(env.ADMIN_PASSWORD),'no authentication secrets in backups');
     const manifest=JSON.parse(db.prepare('SELECT data FROM backups WHERE id=?').get(large.id).data);
