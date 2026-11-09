@@ -1,4 +1,4 @@
-export function memberOnlyHash(hash){return hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';}
+export function memberOnlyHash(hash){return hash==='#notice'||hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';}
 
 export function createMemberAccess(EDITOR,initialMember=false){
   let member=Boolean(EDITOR||initialMember);
@@ -14,7 +14,7 @@ export function memberMenuLabel(member){return member?'회원 로그아웃':'회
 
 export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=false,createScoreHistory,createLedgerView,createLedgerLists,createShuttleInventory,createScheduleInfo){
   const scheduleTools=createScheduleTools();
-  const memberOnlyHash=hash=>hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';
+  const memberOnlyHash=hash=>hash==='#notice'||hash==='#schedule'||hash==='#live'||hash==='#seed'||hash==='#ledger';
   const memberMenuLabel=member=>member?'회원 로그아웃':'회원권한';
   const memberAccess=(()=>{let member=Boolean(EDITOR||MEMBER);return {allowed:()=>Boolean(EDITOR||member),member:()=>member,update:value=>{member=Boolean(EDITOR||value);return member;},revoke:()=>{if(!EDITOR)member=false;return member;}};})();
   let refreshMemberMenu=()=>{},memberDialogOwner=0;
@@ -113,9 +113,24 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     const lines=String(body).replace(/\r\n?/g,'\n').split('\n');
     const parts=[];let list=false;
     function closeList(){if(list){parts.push('</ul>');list=false;}}
-    for(const raw of lines){
+    function parseTable(start){
+      if(!/^\s*\|.*\|\s*$/.test(lines[start]||''))return null;
+      const rows=[];let next=start;
+      while(next<lines.length&&/^\s*\|.*\|\s*$/.test(lines[next])){
+        rows.push(lines[next].trim().slice(1,-1).split('|').map(cell=>cell.trim()));next++;
+      }
+      const columns=rows[0]?.length||0;
+      if(rows.length<2||columns<2||rows.some(row=>row.length!==columns)||!rows[1].every(cell=>/^:?-{3,}:?$/.test(cell)))return null;
+      const head='<thead><tr>'+rows[0].map(cell=>'<th scope="col">'+esc(cell)+'</th>').join('')+'</tr></thead>';
+      const bodyRows=rows.slice(2).map(row=>'<tr>'+row.map(cell=>'<td>'+esc(cell)+'</td>').join('')+'</tr>').join('');
+      return {html:'<div class="notice-table-wrap"><table class="notice-table">'+head+'<tbody>'+bodyRows+'</tbody></table></div>',next};
+    }
+    for(let i=0;i<lines.length;i++){
+      const raw=lines[i];
       const line=raw.replace(/\s+$/,'');
       if(!line.trim()){closeList();continue;}
+      const table=parseTable(i);
+      if(table){closeList();parts.push(table.html);i=table.next-1;continue;}
       const indented=/^[ \t]/.test(line);
       const text=line.trim();
       let m;
@@ -351,7 +366,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   async function detail(id,token){
     const request=++detailRead,current=()=>request===detailRead&&token===routeToken&&!draft;
-    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(!current())return;if(typeof activeMemberContent!=='undefined')activeMemberContent=d.kind==='schedule';
+    const {data:d}=await api('/api/posts/'+encodeURIComponent(id));if(!current())return;if(typeof activeMemberContent!=='undefined')activeMemberContent=true;
     let roster=[];
     if(d.kind==='schedule'){
       try{roster=await getPeople(true);}catch(e){}
@@ -672,10 +687,25 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     function movement(row){if(Number(row.rank_protected)===1)return '<span class="rank-protected">보호적용</span>';const d=Number(row.rank_movement)||0;if(!d)return '<span class="muted">-</span>';return d>0?'<span class="rank-movement">▲ '+d+'</span>':'<span class="rank-down">▼ '+(-d)+'</span>';}
     function pointsMove(row){if(row.previous_points==null||row.previous_points===row.points)return '';const d=row.points-row.previous_points;return d>0?'<span class="pts-delta rank-movement">▲'+d+'</span>':'<span class="pts-delta rank-down">▼'+(-d)+'</span>';}
     function attendanceButton(row){const count=Number(row.cumulative_attendance)||0;return '<button type="button" class="attendance-history-open" data-member-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 누적출석 날짜 보기">'+count+'회</button>';}
+    function attendanceKind(day){
+      const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day));
+      if(!match)return 'flash';
+      const weekday=new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]))).getUTCDay();
+      return weekday===3||weekday===6?'regular':'flash';
+    }
     function showAttendanceHistory(row){
-      const days=Array.isArray(row.attendance_dates)?[...row.attendance_dates].sort().reverse():[],count=days.length;
+      const days=Array.isArray(row.attendance_dates)?[...row.attendance_dates].sort().reverse():[];
+      const groups={regular:days.filter(day=>attendanceKind(day)==='regular'),flash:days.filter(day=>attendanceKind(day)==='flash')};
+      const count=Number(row.cumulative_attendance)||days.length;
       const dateText=day=>{const parts=String(day).split('-').map(Number);return parts.length===3&&parts.every(Number.isFinite)?parts[0]+'년 '+parts[1]+'월 '+parts[2]+'일':day;};
-      dialog.innerHTML='<div class="dialog-head"><h2>'+esc(row.name)+' · 누적출석</h2><button type="button" id="closeAttendanceHistory" aria-label="닫기">×</button></div><p class="attendance-summary">대진 편성 또는 운영진 확인 날짜 기준 · 총 <strong>'+count+'회</strong></p>'+(days.length?'<ol class="attendance-date-list">'+days.map(day=>'<li><time datetime="'+esc(day)+'">'+esc(dateText(day))+'</time></li>').join('')+'</ol>':'<p class="attendance-empty">아직 확인된 참석 날짜가 없습니다.</p>');
+      dialog.innerHTML='<div class="dialog-head"><h2>'+esc(row.name)+' · 누적출석</h2><button type="button" id="closeAttendanceHistory" aria-label="닫기">×</button></div><p class="attendance-summary">대진 편성 또는 운영진 확인 날짜 기준 · 총 <strong>'+count+'회</strong></p><div class="attendance-kind-tabs" role="group" aria-label="출석 종류"><button type="button" class="attendance-kind-tab" data-attendance-kind="regular" aria-pressed="true">정모 '+groups.regular.length+'회</button><button type="button" class="attendance-kind-tab" data-attendance-kind="flash" aria-pressed="false">벙개 '+groups.flash.length+'회</button></div><div id="attendanceDateList"></div>';
+      const renderAttendanceKind=kind=>{
+        const selected=groups[kind],label=kind==='regular'?'정모':'벙개';
+        dialog.querySelectorAll('[data-attendance-kind]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.attendanceKind===kind)));
+        $('attendanceDateList').innerHTML=selected.length?'<ol class="attendance-date-list">'+selected.map(day=>'<li><time datetime="'+esc(day)+'">'+esc(dateText(day))+'</time></li>').join('')+'</ol>':'<p class="attendance-empty">확인된 '+label+' 참석 날짜가 없습니다.</p>';
+      };
+      dialog.querySelectorAll('[data-attendance-kind]').forEach(button=>button.onclick=()=>renderAttendanceKind(button.dataset.attendanceKind));
+      renderAttendanceKind('regular');
       $('closeAttendanceHistory').onclick=()=>dialog.close();dialog.showModal();
     }
     function manageButtons(type,id,version){if(!editing)return '';return '<span class="seed-actions"><button type="button" class="person-manage" data-person-action="edit" data-person-type="'+esc(type)+'" data-person-id="'+esc(id)+'" data-person-version="'+esc(version??1)+'">수정</button><button type="button" class="person-manage" data-person-action="history" data-person-type="'+esc(type)+'" data-person-id="'+esc(id)+'">이력</button></span>';}
@@ -766,7 +796,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
   }
   async function route(){
     const token=++routeToken,hash=location.hash||'#home';lastHash=hash;draft=null;viewRound=1;if(typeof activeMemberContent!=='undefined')activeMemberContent=false;stopPoll();
-    if(['#schedule','#live','#seed','#ledger'].includes(hash)&&typeof memberAccess!=='undefined'&&!memberAccess.allowed()){gateProtectedRoute(hash);return;}
+    if(['#notice','#schedule','#live','#seed','#ledger'].includes(hash)&&typeof memberAccess!=='undefined'&&!memberAccess.allowed()){gateProtectedRoute(hash);return;}
     app.innerHTML='<p class="empty">불러오는 중…</p>';
     try{if(hash==='#schedule'||hash==='#notice')await board(hash.slice(1),token);else if(hash==='#ledger'&&ledgerView)await ledgerView.open(token);else if(hash==='#seed')await seeds(token);else if(hash==='#live'&&liveView)await liveView.open(token);else if(hash.startsWith('#post/')){let id=hash.slice(6);try{id=decodeURIComponent(id);}catch(e){}await detail(id,token);}else home();}catch(e){if(e.memberOnly)return;if(token===routeToken){app.innerHTML=crumb()+'<div class="panel error-box">'+esc(e.message)+'<p><button id="retry">다시 시도</button></p></div>';$('retry').onclick=route;}}
   }

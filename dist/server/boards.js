@@ -332,7 +332,7 @@ export default {async fetch(request,env){
       const blocked=await requireMember(request,env);if(blocked)return blocked;
       try{return await scoreHistory(request,env);}catch{return json({error:'점수 기록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.'},503);}
     }
-    const privateRead=request.method==='GET'&&(['/api/people','/api/rankings','/api/mvp','/api/schedule'].includes(path)||(path==='/api/posts'&&url.searchParams.get('kind')==='schedule'));
+    const privateRead=request.method==='GET'&&(['/api/people','/api/rankings','/api/mvp','/api/schedule'].includes(path)||(path==='/api/posts'&&['schedule','notice'].includes(url.searchParams.get('kind'))));
     const memberAction=/^\/api\/posts\/[a-zA-Z0-9-]{1,80}\/(result|progress)$/.test(path);
     if(privateRead||memberAction){const blocked=await requireMember(request,env);if(blocked)return blocked;}
     try{
@@ -594,7 +594,7 @@ export default {async fetch(request,env){
       const id=match[1];
       if(request.method==='GET'){
         const row=await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
-        if(row?.kind==='schedule'){const blocked=await requireMember(request,env);if(blocked)return blocked;}
+        if(row?.kind==='schedule'||row?.kind==='notice'){const blocked=await requireMember(request,env);if(blocked)return blocked;}
         if(!row)return json({error:'게시글을 찾을 수 없습니다.'},404);
         const data=unpack(row);
         if(row.kind==='schedule'&&!(key&&request.headers.get('x-kokkiri-editor')===key)){

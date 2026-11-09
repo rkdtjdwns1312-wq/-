@@ -71,4 +71,7 @@ export const css=`
 :root{--home-card-height:190px}
 .menus .menu{height:var(--home-card-height);min-height:var(--home-card-height)}
 @media(max-width:650px){:root{--home-card-height:115px}}
+.attendance-kind-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}.attendance-kind-tab{border:1px solid #bfe9cf;background:#f7fdf9;color:#27623f;border-radius:12px;padding:10px 12px;font-weight:800}.attendance-kind-tab[aria-pressed="true"]{background:#03ac50;border-color:#03ac50;color:#fff}
+.notice-table-wrap{max-width:100%;overflow-x:auto;margin:18px 0;border:1px solid #cfe4d7;border-radius:14px;background:#fff}.notice-table{width:100%;min-width:620px;border-collapse:collapse;font-size:.94rem;line-height:1.55}.notice-table th,.notice-table td{padding:11px 13px;border-right:1px solid #dcebe1;border-bottom:1px solid #dcebe1;text-align:left;vertical-align:top}.notice-table th:last-child,.notice-table td:last-child{border-right:0}.notice-table tbody tr:last-child td{border-bottom:0}.notice-table thead th{background:#168449;color:#fff;font-weight:800}.notice-table tbody tr:nth-child(even){background:#f2fbf5}.notice-table th:first-child,.notice-table td:first-child{width:28%;font-weight:700;color:#205b37}
+@media(max-width:650px){.notice-table-wrap{margin:14px -2px}.notice-table{font-size:.88rem}.notice-table th,.notice-table td{padding:9px 10px}}
 `;

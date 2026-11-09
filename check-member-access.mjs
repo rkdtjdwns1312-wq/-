@@ -17,14 +17,12 @@ export async function runMemberAccessChecks(){
   const config=(version,pw=password,headers=operator)=>call('/api/member-access/config','POST',{version,password:pw},headers);
   const login=(pw=password,headers={})=>call('/api/member-login','POST',{password:pw},headers);
   const snapshot=()=>JSON.stringify(['board_posts','ranking_members','guests','ranking_settlements'].map(t=>sqlite.prepare('SELECT * FROM '+t).all()));
-  const privatePaths=['/api/people','/api/rankings','/api/mvp','/api/schedule','/api/posts?kind=schedule','/api/live-courts','/api/posts/member-private','/api/posts/member-private?kind=notice'];
+  const privatePaths=['/api/people','/api/rankings','/api/mvp','/api/schedule','/api/posts?kind=schedule','/api/posts?kind=notice','/api/live-courts','/api/posts/member-private','/api/posts/member-public'];
   try{
     const now=new Date().toISOString();
     for(const [id,kind] of [['member-private','schedule'],['member-public','notice']])sqlite.prepare("INSERT INTO board_posts(id,kind,payload,version,created_at,updated_at,last_operation) VALUES(?,?,?,1,?,?,'fixture')").run(id,kind,JSON.stringify({title:kind==='schedule'?'private-title':'public-title',names:['private-name'],schedule:[],rounds:0}),now,now);
     const before=snapshot();
     assert.equal((await call('/')).status,200);
-    assert.equal((await call('/api/posts?kind=notice')).status,200);
-    assert.equal((await call('/api/posts/member-public')).status,200);
     for(const path of privatePaths){
       const r=await call(path);assert.equal(r.status,401,path);assert.equal(r.headers.get('cache-control'),'no-store');
       assert.deepEqual(await r.json(),{error:'회원만 볼 수 있는 메뉴입니다',code:'MEMBERS_ONLY'});
@@ -104,6 +102,6 @@ export async function runMemberAccessChecks(){
     assert.equal((await call('/api/rankings','GET',undefined,operator)).status,200,'operator bypass remains available');
     assert.equal(snapshot(),before,'authentication does not mutate schedules, results, roster or scores');
   }finally{sqlite.close();}
-  console.log('PASS: raw-worker member access, public notices, private read/write gates, operator separation, secure cookie, CSRF, KDF configuration CAS, throttle concurrency, rotation and fail-closed checks.');
+  console.log('PASS: raw-worker member access, member-only notices, private read/write gates, operator separation, secure cookie, CSRF, KDF configuration CAS, throttle concurrency, rotation and fail-closed checks.');
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)await runMemberAccessChecks();

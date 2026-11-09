@@ -33,7 +33,7 @@ function dialogHarness(){
 function checkAccessContract(){
   assert.equal(memberOnlyHash('#schedule'),true);assert.equal(memberOnlyHash('#live'),true);assert.equal(memberOnlyHash('#seed'),true);
   assert.equal(memberOnlyHash('#ledger'),true);
-  assert.equal(memberOnlyHash('#notice'),false);assert.equal(memberOnlyHash('#post/notice'),false);
+  assert.equal(memberOnlyHash('#notice'),true);assert.equal(memberOnlyHash('#post/notice'),false);
   const member=createMemberAccess('',false);assert.equal(member.allowed(),false);member.update(true);assert.equal(member.allowed(),true);member.revoke();assert.equal(member.allowed(),false);
   const editor=createMemberAccess('editor-key',false);assert.equal(editor.allowed(),true);editor.revoke();assert.equal(editor.allowed(),true,'EDITOR always implies member access');
   assert.equal(memberMenuLabel(false),'회원권한');assert.equal(memberMenuLabel(true),'회원 로그아웃');
@@ -70,9 +70,9 @@ async function checkRoutesAndMemberOnlyResponse(){
   const calls=[],gates=[];
   const route=compile('route',{location:{hash:'#schedule'},routeToken:0,lastHash:'',draft:null,viewRound:1,stopPoll(){},app:{innerHTML:''},memberAccess:{allowed:()=>false},gateProtectedRoute:hash=>gates.push(hash),board:async()=>calls.push('board'),seeds:async()=>calls.push('seed'),liveView:{open:async()=>calls.push('live')},detail:async()=>calls.push('detail'),home(){calls.push('home');},crumb:()=>'',esc,$:()=>null});
   await route();assert.deepEqual(gates,['#schedule']);assert.deepEqual(calls,[],'protected hash routes are denied before any data fetch/render function');
-  const noticeCalls=[];
-  const noticeRoute=compile('route',{location:{hash:'#notice'},routeToken:0,lastHash:'',draft:null,viewRound:1,stopPoll(){},app:{innerHTML:''},memberAccess:{allowed:()=>false},gateProtectedRoute(){throw Error('notice must stay public');},board:async kind=>noticeCalls.push(kind),seeds:async()=>{},liveView:null,detail:async()=>{},home(){},crumb:()=>'',esc,$:()=>null});
-  await noticeRoute();assert.deepEqual(noticeCalls,['notice']);
+  const noticeCalls=[],noticeGates=[];
+  const noticeRoute=compile('route',{location:{hash:'#notice'},routeToken:0,lastHash:'',draft:null,viewRound:1,stopPoll(){},app:{innerHTML:''},memberAccess:{allowed:()=>false},gateProtectedRoute:hash=>noticeGates.push(hash),board:async kind=>noticeCalls.push(kind),seeds:async()=>{},liveView:null,detail:async()=>{},home(){},crumb:()=>'',esc,$:()=>null});
+  await noticeRoute();assert.deepEqual(noticeGates,['#notice']);assert.deepEqual(noticeCalls,[],'notice route gates before fetching posts');
 
   let invalidated=0,shown=0,directReads=0;const api=compile('api',{EDITOR:'editor-key',memberAuthEpoch:0,routeToken:1,activeMemberContent:false,memberOnlyHash,location:{href:'https://kokkiri.example/#post/schedule-1',origin:'https://kokkiri.example',hash:'#post/schedule-1'},fetch:async()=>{directReads++;return {ok:false,status:401,json:async()=>({code:'MEMBERS_ONLY',error:'denied'})};},pendingMemberTarget:'',invalidateMemberAccess(){invalidated++;},showMemberGate(){shown++;},renderCurrentPublicRoute(){}});
   await assert.rejects(()=>api('/api/posts/schedule-1'),error=>error.status===401&&error.code==='MEMBERS_ONLY'&&error.memberOnly===true);
@@ -87,7 +87,7 @@ async function checkRoutesAndMemberOnlyResponse(){
   await assert.rejects(()=>pending401,error=>error.code==='MEMBERS_ONLY'&&!error.memberOnly);assert.equal(oldInvalidated,0);assert.equal(oldGate,0,'a 401 from before a new login cannot revoke the new member session');
   const moved401=deferred(),movedLocation={href:'https://kokkiri.example/#schedule',origin:'https://kokkiri.example',hash:'#schedule'};let movedInvalidated=0,movedGate=0,movedPublic=0;
   const moved=new Function('location','fetch','invalidateMemberAccess','showMemberGate','renderCurrentPublicRoute','memberOnlyHash','EDITOR',`let memberAuthEpoch=0,pendingMemberTarget='',routeToken=1,activeMemberContent=true;${actual('api')}return {api,navigateNotice(){routeToken++;activeMemberContent=false;location.hash='#notice';}};`)(movedLocation,()=>moved401.promise,()=>movedInvalidated++,()=>movedGate++,()=>movedPublic++,memberOnlyHash,'');
-  const pendingMoved=moved.api('/api/people');moved.navigateNotice();moved401.resolve({ok:false,status:401,json:async()=>({code:'MEMBERS_ONLY',error:'expired'})});await assert.rejects(()=>pendingMoved,error=>error.code==='MEMBERS_ONLY');assert.equal(movedInvalidated,1);assert.equal(movedGate,0);assert.equal(movedPublic,1,'a delayed private 401 after navigating to notice preserves the current public route instead of opening a gate');
+  const pendingMoved=moved.api('/api/people');moved.navigateNotice();moved401.resolve({ok:false,status:401,json:async()=>({code:'MEMBERS_ONLY',error:'expired'})});await assert.rejects(()=>pendingMoved,error=>error.code==='MEMBERS_ONLY');assert.equal(movedInvalidated,1);assert.equal(movedGate,1);assert.equal(movedPublic,0,'a delayed private 401 after navigating to notice opens the member gate for that route');
 }
 
 async function checkMemberLoginOwnership(){
@@ -153,7 +153,7 @@ async function checkSessionRevalidation(){
   };
   const valid=make({serverMember:true,active:false});await valid.view.revalidateMemberSession();assert.deepEqual(valid.events,[],'a valid focus/session check does not route or repaint');
   const expired=make({serverMember:false,active:true});await expired.view.revalidateMemberSession();assert.deepEqual(expired.events,['invalidate','gate'],'an expired private session clears private UI and uses the gate');
-  const publicExpired=make({serverMember:false,active:false});await publicExpired.view.revalidateMemberSession();assert.deepEqual(publicExpired.events,['invalidate','home'],'an expired public session returns to the public home without a private fetch');
+  const publicExpired=make({serverMember:false,active:false});await publicExpired.view.revalidateMemberSession();assert.deepEqual(publicExpired.events,['invalidate','gate'],'an expired session on the notice route clears the notice and uses the member gate');
   let resolve;const pending=new Promise(yes=>{resolve=yes;}),access=createMemberAccess('',true),events=[];
   const late=new Function('memberAccess','api','document','memberOnlyHash','invalidateMemberAccess','showMemberGate','renderPublicHome','location','EDITOR',`let memberSessionRead=0,memberAuthEpoch=0,activeMemberContent=true,pendingMemberTarget='';${actual('revalidateMemberSession')}return {revalidateMemberSession,login(){memberAuthEpoch++;}};`)(access,()=>pending,{visibilityState:'visible'},memberOnlyHash,()=>events.push('invalidate'),()=>events.push('gate'),()=>events.push('home'),{hash:'#schedule'},'');
   const check=late.revalidateMemberSession();late.login();resolve({member:false});await check;assert.deepEqual(events,[],'a late session response from before a new login cannot repaint or revoke access');
