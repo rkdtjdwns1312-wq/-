@@ -672,17 +672,19 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       finally{generating=false;if($('generate')===button){button.disabled=false;button.textContent=buttonText;}}
     };render();renderMethods();dialog.showModal();
   }
-  function excellentMemberNames(lists){return new Set(lists.flatMap(list=>(list?.data?.entries||[]).map(e=>String(e.name||'').normalize('NFC').trim()).filter(Boolean)));}
-  function excellentMemberBadge(name,names){return names.has(String(name||'').normalize('NFC').trim())?'<span class="excellent-member-badge" title="선납 또는 찬조 명단에 등록된 회원" aria-label="우수회원">우수회원</span>':'';}
+  function excellentMemberNames(lists,today=''){return new Set(lists.flatMap((list,index)=>(list?.data?.entries||[]).filter(entry=>index!==0||!today||String(entry.expiresAt||'2027-05-01')>=today).map(entry=>String(entry.name||'').normalize('NFC').trim()).filter(Boolean)));}
+  function excellentMemberBadge(name,names){return names.has(String(name||'').normalize('NFC').trim())?'<span class="excellent-member-badge" title="유효기한 내 선납 또는 찬조 회원" aria-label="우수회원">우수회원</span>':'';}
   async function seeds(token){
     if(typeof activeMemberContent!=='undefined')activeMemberContent=true;
     let type='member',editing=false,excellentNames=new Set(),excellentUnavailable=false;const checked=new Set();
     async function load(){
       await getPeople(true);
       const [rd,lists]=await Promise.all([api('/api/rankings'),Promise.all([api('/api/ledger-lists/prepaid'),api('/api/ledger-lists/sponsors')]).catch(e=>{if(e.memberOnly)throw e;return null;})]);
-      if(token!==routeToken)return null;excellentUnavailable=lists===null;excellentNames=excellentMemberNames(lists||[]);return rd;
+      if(token!==routeToken)return null;excellentUnavailable=lists===null;excellentNames=excellentMemberNames(lists||[],rd.today);return rd;
     }
     let rankingData=await load();if(!rankingData)return;let ranking=rankingData.items;syncOperators(ranking);
+    const isExcellent=name=>excellentNames.has(String(name||'').normalize('NFC').trim());
+    const ghostMemberBadge=row=>!excellentUnavailable&&Number(row.regular_attendance_3m)===0&&!isExcellent(row.name)?'<span class="ghost-member-badge" title="최근 3개월 정모 출석 0회" aria-label="유령회원">유령회원</span>':'';
     const ud=(rankingData.updatedDate||'2026-09-10').split('-'),updatedText=(+ud[0])+'년 '+(+ud[1])+'월 '+(+ud[2])+'일';
     function movement(row){if(Number(row.rank_protected)===1)return '<span class="rank-protected">보호적용</span>';const d=Number(row.rank_movement)||0;if(!d)return '<span class="muted">-</span>';return d>0?'<span class="rank-movement">▲ '+d+'</span>':'<span class="rank-down">▼ '+(-d)+'</span>';}
     function pointsMove(row){if(row.previous_points==null||row.previous_points===row.points)return '';const d=row.points-row.previous_points;return d>0?'<span class="pts-delta rank-movement">▲'+d+'</span>':'<span class="pts-delta rank-down">▼'+(-d)+'</span>';}
@@ -695,7 +697,9 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
     }
     function showAttendanceHistory(row){
       const days=Array.isArray(row.attendance_dates)?[...row.attendance_dates].sort().reverse():[];
-      const groups={regular:days.filter(day=>attendanceKind(day)==='regular'),flash:days.filter(day=>attendanceKind(day)==='flash')};
+      const kindByDate=new Map((Array.isArray(row.attendance_entries)?row.attendance_entries:[]).map(entry=>[entry.date,entry.kind]));
+      const kind=day=>kindByDate.get(day)||attendanceKind(day);
+      const groups={regular:days.filter(day=>kind(day)==='regular'),flash:days.filter(day=>kind(day)==='flash')};
       const count=Number(row.cumulative_attendance)||days.length;
       const dateText=day=>{const parts=String(day).split('-').map(Number);return parts.length===3&&parts.every(Number.isFinite)?parts[0]+'년 '+parts[1]+'월 '+parts[2]+'일':day;};
       dialog.innerHTML='<div class="dialog-head"><h2>'+esc(row.name)+' · 누적출석</h2><button type="button" id="closeAttendanceHistory" aria-label="닫기">×</button></div><p class="attendance-summary">대진 편성 또는 운영진 확인 날짜 기준 · 총 <strong>'+count+'회</strong></p><div class="attendance-kind-tabs" role="group" aria-label="출석 종류"><button type="button" class="attendance-kind-tab" data-attendance-kind="regular" aria-pressed="true">정모 '+groups.regular.length+'회</button><button type="button" class="attendance-kind-tab" data-attendance-kind="flash" aria-pressed="false">벙개 '+groups.flash.length+'회</button></div><div id="attendanceDateList"></div>';
@@ -719,7 +723,7 @@ export function client(EDITOR,ADMIN,createScheduleTools,createLiveView,MEMBER=fa
       if(type==='member'){
         const list=ranking.filter(row=>row.name.includes(term));$('seedCount').textContent='회원 '+list.length+'명';
         const opBtn=row=>ADMIN?'<button type="button" class="op-toggle'+(row.is_operator?' on':'')+'" data-mid="'+esc(row.member_id)+'" data-on="'+(row.is_operator?1:0)+'">'+(row.is_operator?'운영진 해제':'운영진 임명')+'</button>':'';
-        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td><button type="button" class="score-history-open" data-score-history-type="member" data-score-history-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 점수 변화 보기">'+nameHTML(row.name)+'</button>'+crown(row.name)+excellentMemberBadge(row.name,excellentNames)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td><td>'+attendanceButton(row)+'</td></tr>').join('');
+        const rows=list.map(row=>'<tr>'+cb(row.member_id)+'<td>'+row.rank+'</td><td>'+movement(row)+'</td><td><button type="button" class="score-history-open" data-score-history-type="member" data-score-history-id="'+esc(row.member_id)+'" aria-label="'+esc(row.name)+' 점수 변화 보기">'+nameHTML(row.name)+'</button>'+crown(row.name)+excellentMemberBadge(row.name,excellentNames)+ghostMemberBadge(row)+opBtn(row)+manageButtons('member',row.member_id,row.edit_version)+'</td><td><span class="seed-badge">'+seedHTML(row.seed)+'</span></td><td><span class="pts-cell">'+row.points+'</span>'+pointsMove(row)+'</td><td>'+row.attendance+'</td><td>'+row.wins+'</td><td>'+row.losses+'</td><td>'+attendanceButton(row)+'</td></tr>').join('');
         $('seedList').innerHTML=rows?'<div class="panel ranking-table-wrap"><table class="ranking-table"><thead><tr>'+cbHead+'<th>순위</th><th>변동</th><th>회원</th><th>시드</th><th>점수</th><th>출석</th><th>승</th><th>패</th><th>누적출석</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p>검색 결과가 없습니다.</p>';
       }else{
         const ranked=people.filter(p=>p.type==='guest'&&!p.adhoc).map((p,i)=>({...p,i})).sort((a,b)=>{const ap=Number(a.points)||0,bp=Number(b.points)||0;if(bp!==ap)return bp-ap;if(ap===20){const ag= a.floor_protected_at?1:0,bg=b.floor_protected_at?1:0;if(ag!==bg)return ag-bg;if(ag)return String(a.floor_protected_at).localeCompare(String(b.floor_protected_at));}return a.i-b.i;}).map((p,idx)=>({...p,rank:idx+1}));

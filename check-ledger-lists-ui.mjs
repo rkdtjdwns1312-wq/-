@@ -57,10 +57,10 @@ export async function runLedgerListsUIChecks(){
     assert.ok(h.app.innerHTML.includes('찬조명단')&&h.app.innerHTML.includes('총 30,000원'),'sponsor list and total render');
     assert.ok(h.app.innerHTML.includes('ledger-list-table')&&h.app.innerHTML.includes('ledger-list-scroll'),'vertical list table is present');
     assert.ok(h.app.innerHTML.includes('ledger-list-total')&&h.app.innerHTML.includes('ledger-list-error'),'markup uses the factory total and error classes');
-    assert.ok(h.app.innerHTML.includes('class="list-name"')&&h.app.innerHTML.includes('class="list-amount"')&&h.app.innerHTML.includes('class="list-date"'),'each data column has its semantic style class');
+    assert.ok(h.app.innerHTML.includes('class="list-name"')&&h.app.innerHTML.includes('class="list-amount"')&&h.app.innerHTML.includes('class="list-date"'),'each sponsor data column has its semantic style class');
     assert.match(ledgerListsCss,/\.ledger-list-scroll\{[^}]*max-height:min\(58vh,520px\)[^}]*overflow:auto/s,'list scroll region is vertically bounded and scrollable');
     assert.match(ledgerListsCss,/\.ledger-list-table\{[^}]*width:100%[^}]*min-width:360px/s,'read-only table fits narrow panels');
-    assert.match(ledgerListsCss,/\.ledger-list-table\.editing\{[^}]*min-width:560px/s,'editing table keeps comfortable input widths inside horizontal scroll');
+    assert.match(ledgerListsCss,/\.ledger-list-table\.editing\{[^}]*min-width:720px/s,'editing table keeps comfortable input widths inside horizontal scroll');
     assert.match(ledgerListsCss,/\.list-amount[^}]*text-align:right[^}]*white-space:nowrap[^}]*font-variant-numeric:tabular-nums/s,'amount column is right aligned and stays on one line');
     assert.match(ledgerListsCss,/\.list-date[^}]*white-space:nowrap[^}]*font-variant-numeric:tabular-nums/s,'date column stays on one line with tabular digits');
     assert.match(ledgerListsCss,/\.list-name[^}]*overflow-wrap:anywhere/s,'long names can wrap');
@@ -69,6 +69,7 @@ export async function runLedgerListsUIChecks(){
   }
   {
     const h=harness();await h.open();await h.app.querySelector('#listEdit').dispatch('click');
+    assert.ok(h.app.innerHTML.includes('유효기한')&&h.app.innerHTML.includes('class="list-expiry"'),'prepaid list shows the expiry column beside its date');
     assert.ok(h.app.innerHTML.includes('ledger-list-table editing'),'edit mode marks the table for its wider layout');
     const check=h.app.querySelector('[data-select="entry-1"]');check.checked=true;await check.dispatch('change');
     assert.equal(h.app.querySelector('#listModify').disabled,false,'selection enables modification');
@@ -87,11 +88,11 @@ export async function runLedgerListsUIChecks(){
   }
   {
     const h=harness({initial:payload([])});await h.open();await h.app.querySelector('#listEdit').dispatch('click');await h.app.querySelector('#listAdd').dispatch('click');
-    const fields=h.app.querySelectorAll('[data-list-field]');assert.equal(fields.length,3,'add creates editable name, amount, and date fields');
+    const fields=h.app.querySelectorAll('[data-list-field]');assert.equal(fields.length,4,'add creates editable name, amount, date, and expiry fields');
     assert.ok(fields[0].focused,'new row focuses its name field');
     for(const field of fields){if(field.dataset.listField==='name')field.value='신규 회원';if(field.dataset.listField==='amount')field.value='45000';}
     await fields[0].dispatch('input');await fields[1].dispatch('input');await h.app.querySelector('#listSave').dispatch('click');
-    assert.equal(h.calls.find(call=>call.method==='PUT').body.entries[0].amount,45000,'new entry is serialized with numeric amount');
+    const saved=h.calls.find(call=>call.method==='PUT').body.entries[0];assert.equal(saved.amount,45000,'new entry is serialized with numeric amount');assert.equal(saved.expiresAt,'2027-05-01','new prepaid entry defaults to the current excellent-member expiry');
   }
   {
     const h=harness();await h.open();await h.app.querySelector('#listEdit').dispatch('click');await selectForEdit(h.app);const input=h.app.querySelector('[data-list-field="name"]');input.value='임시 수정';await input.dispatch('input');

@@ -101,7 +101,7 @@ export async function runLedgerListChecks(options){
     assert.deepEqual(await success(await call()),initial);assert.deepEqual(await success(await sponsor()),initial);
     const beforeRead=snapshot(db);await success(await call());assert.equal(snapshot(db),beforeRead);
     const original=write(0,{entries:[entry({name:'  첫 회원  '}),entry({date:'2000-02-29'}),entry({date:'0001-01-01',amount:1})]});
-    const normalized=original.entries.map(e=>({...e,name:e.name.trim()}));
+    const normalized=original.entries.map(e=>({...e,name:e.name.trim(),expiresAt:'2027-05-01'}));
     let current=await success(await call(original));const receipt=current;
     assert.equal(current.version,1);assert.deepEqual(current.entries,normalized);assert.ok(Number.isFinite(Date.parse(current.updatedAt)));
     assert.deepEqual(JSON.parse(revisions('prepaid')[0].previous_snapshot),initial);
@@ -111,11 +111,12 @@ export async function runLedgerListChecks(options){
     let sponsorCurrent=await success(await sponsor(sponsorOriginal));assert.equal(sponsorCurrent.version,1,'same operation is independent per list');
     const beforeRetry=snapshot(db);
     assert.deepEqual(await success(await call(original)),receipt);
-    const reordered={operation:original.operation.toUpperCase(),version:0,entries:normalized.map(e=>({date:e.date,amount:e.amount,name:e.name,id:e.id.toUpperCase()}))};
+    const reordered={operation:original.operation.toUpperCase(),version:0,entries:normalized.map(e=>({expiresAt:e.expiresAt,date:e.date,amount:e.amount,name:e.name,id:e.id.toUpperCase()}))};
     assert.deepEqual(await success(await call(reordered)),receipt,'normalization and key order preserve retry identity');
     for(const patch of [{entries:[]},{version:1}])assert.equal((await call({...original,...patch})).status,409);
     assert.equal(snapshot(db),beforeRetry);
-    current=await success(await call(write(current.version,{entries:[{...normalized[0],amount:20000},entry()]})));
+    current=await success(await call(write(current.version,{entries:[{...normalized[0],amount:20000,expiresAt:'2028-01-31'},entry()]})));
+    assert.equal(current.entries[0].expiresAt,'2028-01-31','operator-selected prepaid expiry persists');
     assert.deepEqual(JSON.parse(revisions('prepaid').at(-1).previous_snapshot),receipt,'edit/delete keeps authoritative prior state');
     const afterEdit=snapshot(db);
     assert.deepEqual(await success(await call(original)),receipt,'late retry returns original receipt');
@@ -128,6 +129,7 @@ export async function runLedgerListChecks(options){
       ...['','  ','가'.repeat(81),'이름\n','\t이름','이름\u0000','이름\u007f','이름\u0085',null,123].map(name=>write(current.version,{entries:[entry({name})]})),
       ...[-1,0,.5,1e12+1,Number.MAX_SAFE_INTEGER+1,'100',null,true].map(amount=>write(current.version,{entries:[entry({amount})]})),
       ...['2026-02-29','1900-02-29','2026-04-31','2026-00-10','2026-13-01','2026-01-00','0000-01-01','2026-1-01','2026-01-01T00:00:00Z',null].map(date=>write(current.version,{entries:[entry({date})]})),
+      ...['2027-02-29','2027-00-01','2027-13-01','2027-5-1','',null].map(expiresAt=>write(current.version,{entries:[{...entry(),expiresAt}]})),
       write(current.version,{entries:[null]}),write(current.version,{entries:[{...entry(),unknown:true}]}),
       JSON.stringify(write(current.version)).replace('{','{"__proto__":{"polluted":true},'),
       JSON.stringify(write(current.version,{entries:[entry()]})).replace('"id":','"constructor":{"prototype":{"polluted":true}},"id":')

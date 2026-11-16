@@ -32,7 +32,7 @@ import { createShuttleInventory } from './shuttle-inventory-client.js';
 import { shuttleInventoryCss } from './shuttle-inventory-style.js';
 import { createScheduleInfo } from './schedule-info-client.js';
 import { scheduleInfoCss } from './schedule-info-style.js';
-import { readAttendanceHistories } from './attendance-history.js';
+import { monthsBefore,readAttendanceHistories,recentRegularAttendance } from './attendance-history.js';
 
 function scoredState(row,delta,at){
   const d=delta||{attendance:0,wins:0,losses:0,points:0};
@@ -46,6 +46,10 @@ function scoredState(row,delta,at){
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
 const defaultTitle=()=>new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
+function kstToday(){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),value=type=>parts.find(part=>part.type===type)?.value;
+  return value('year')+'-'+value('month')+'-'+value('day');
+}
 
 // 옛 단일 대진표(schedules id=1)는 마이그레이션 0004에서 board_posts로 1회 이관했다.
 // 예전에는 조회 때마다 되살렸으나(preserveLegacy) 그 때문에 삭제해도 다시 생겨 제거했다(요청 065).
@@ -351,7 +355,8 @@ export default {async fetch(request,env){
         const attendanceHistories=await readAttendanceHistories(env.DB,results);
         const sourceDate='2026-09-10';
         const updatedDate=weekly.settledAt?new Date(weekly.settledAt).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}):sourceDate;
-        return json({items:results.map(r=>{const attendance_dates=attendanceHistories.get(r.member_id)||[];return {...weekly.member(r),cumulative_attendance:attendance_dates.length,attendance_dates};}),source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate,displaySettlementId:weekly.scheduleId});
+        const today=kstToday(),attendanceWindowStart=monthsBefore(today,3);
+        return json({items:results.map(r=>{const attendance_dates=attendanceHistories.get(r.member_id)||[],kinds=attendanceHistories.kinds?.get(r.member_id)||new Map(),attendance_entries=attendance_dates.map(date=>({date,kind:kinds.get(date)||'flash'})),regular_attendance_3m=recentRegularAttendance(attendance_entries,today);return {...weekly.member(r),cumulative_attendance:attendance_dates.length,attendance_dates,attendance_entries,regular_attendance_3m};}),source:'콕끼리 시드 관리표.xlsx',sourceDate,updatedDate,today,attendanceWindowStart,displaySettlementId:weekly.scheduleId});
       }
       if(path==='/api/people'&&request.method==='POST'){
         if(!key||request.headers.get('x-kokkiri-editor')!==key)return json({error:'운영진만 추가할 수 있습니다.'},403);

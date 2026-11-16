@@ -12,11 +12,12 @@ function calendarDate(value){
   const time=Date.parse(value+'T00:00:00.000Z');
   return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;
 }
-function validEntries(entries){
+function validEntries(entries,kind,allowLegacy=false){
   if(!Array.isArray(entries)||entries.length>MAX_ENTRIES)return false;
   const ids=new Set();
   for(const entry of entries){
-    if(!exactKeys(entry,['id','name','amount','date'])||typeof entry.id!=='string'||!uuid.test(entry.id)||ids.has(entry.id.toLowerCase())||typeof entry.name!=='string'||!entry.name.trim()||entry.name.trim().length>80||/[\u0000-\u001f\u007f-\u009f]/.test(entry.name)||!Number.isSafeInteger(entry.amount)||entry.amount<1||entry.amount>MAX_AMOUNT||!calendarDate(entry.date))return false;
+    const prepaid=kind==='prepaid',keys=prepaid?['id','name','amount','date','expiresAt']:['id','name','amount','date'];
+    if(!(exactKeys(entry,keys)||prepaid&&allowLegacy&&exactKeys(entry,['id','name','amount','date']))||typeof entry.id!=='string'||!uuid.test(entry.id)||ids.has(entry.id.toLowerCase())||typeof entry.name!=='string'||!entry.name.trim()||entry.name.trim().length>80||/[\u0000-\u001f\u007f-\u009f]/.test(entry.name)||!Number.isSafeInteger(entry.amount)||entry.amount<1||entry.amount>MAX_AMOUNT||!calendarDate(entry.date)||prepaid&&Object.hasOwn(entry,'expiresAt')&&!calendarDate(entry.expiresAt))return false;
     ids.add(entry.id.toLowerCase());
   }
   return true;
@@ -24,14 +25,14 @@ function validEntries(entries){
 // Stable order and normalization make equivalent retries identical. These
 // lists are authoritative records. Ledger GET derives income from them; list
 // writes never copy rows into ledger_state or change manual revisions/people.
-const payloadOf=value=>({entries:value.entries.map(entry=>({id:entry.id.toLowerCase(),name:entry.name.trim(),amount:entry.amount,date:entry.date}))});
-export function unpackLedgerList(row){
+const payloadOf=(value,kind)=>({entries:value.entries.map(entry=>({id:entry.id.toLowerCase(),name:entry.name.trim(),amount:entry.amount,date:entry.date,...(kind==='prepaid'?{expiresAt:entry.expiresAt||'2027-05-01'}:{})}))});
+export function unpackLedgerList(row,kind='sponsors'){
   if(!row||!Number.isSafeInteger(row.version)||row.version<0)throw new Error('Missing list state');
   const payload=JSON.parse(row.payload);
-  if(!exactKeys(payload,['entries'])||!validEntries(payload.entries))throw new Error('Invalid list state');
-  return {...payloadOf(payload),version:row.version,updatedAt:row.updated_at};
+  if(!exactKeys(payload,['entries'])||!validEntries(payload.entries,kind,true))throw new Error('Invalid list state');
+  return {...payloadOf(payload,kind),version:row.version,updatedAt:row.updated_at};
 }
-const unpack=unpackLedgerList;
+const unpack=(row,kind)=>unpackLedgerList(row,kind);
 async function readInput(request){
   const oversized=()=>({error:json({error:'입력 내용은 256 KiB 이하여야 합니다.'},413)});
   if(Number(request.headers.get('content-length'))>MAX_BYTES)return oversized();
@@ -59,16 +60,16 @@ export async function ledgerLists(request,env,kind){
   if(!env.DB)return unavailable();
   try{
     const readState=()=>env.DB.prepare('SELECT payload,version,updated_at FROM ledger_list_state WHERE kind=?').bind(kind).first();
-    if(request.method==='GET')return json({data:unpack(await readState())});
+    if(request.method==='GET')return json({data:unpack(await readState(),kind)});
     const parsed=await readInput(request);if(parsed.error)return parsed.error;
     const input=parsed.data;
-    if(!exactKeys(input,['entries','version','operation'])||!Number.isSafeInteger(input.version)||input.version<0||input.version>=Number.MAX_SAFE_INTEGER||typeof input.operation!=='string'||!uuid.test(input.operation)||!validEntries(input.entries))return json({error:'명단의 이름·금액·날짜와 저장 버전을 확인해주세요.'},400);
-    const operation=input.operation.toLowerCase(),payload=payloadOf(input);
+    if(!exactKeys(input,['entries','version','operation'])||!Number.isSafeInteger(input.version)||input.version<0||input.version>=Number.MAX_SAFE_INTEGER||typeof input.operation!=='string'||!uuid.test(input.operation)||!validEntries(input.entries,kind,true))return json({error:'명단의 이름·금액·날짜·유효기한과 저장 버전을 확인해주세요.'},400);
+    const operation=input.operation.toLowerCase(),payload=payloadOf(input,kind);
     const requestPayload=JSON.stringify({version:input.version,...payload});
     const previousOperation=()=>env.DB.prepare('SELECT request_payload,new_snapshot FROM ledger_list_revisions WHERE kind=? AND operation=?').bind(kind,operation).first();
     const replay=row=>row.request_payload===requestPayload?json({data:JSON.parse(row.new_snapshot)}):conflict();
     const prior=await previousOperation();if(prior)return replay(prior);
-    const current=unpack(await readState());
+    const current=unpack(await readState(),kind);
     if(current.version!==input.version){
       const raced=await previousOperation();return raced?replay(raced):conflict();
     }

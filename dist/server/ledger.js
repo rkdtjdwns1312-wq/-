@@ -46,7 +46,7 @@ async function readLedger(db){
     WHERE m.id=1`).first();
   const manual=unpack(row);
   const linkedEntries=['prepaid','sponsors'].flatMap(kind=>{
-    const list=unpackLedgerList({payload:row[kind+'_payload'],version:row[kind+'_version'],updated_at:row[kind+'_updated_at']});
+    const list=unpackLedgerList({payload:row[kind+'_payload'],version:row[kind+'_version'],updated_at:row[kind+'_updated_at']},kind);
     return list.entries.map(entry=>({id:'linked:'+kind+':'+entry.id,date:entry.date,
       description:(kind==='prepaid'?'선납 회비 · ':'찬조 · ')+entry.name,
       income:entry.amount,expense:0,note:'',sourceKind:kind,sourceId:entry.id}));

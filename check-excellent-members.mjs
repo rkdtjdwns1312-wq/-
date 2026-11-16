@@ -54,6 +54,11 @@ export async function runExcellentMemberChecks(){
     assert.deepEqual([...listNames].sort(),['Café','가나다','게스트이름'].sort(),'prepaid and sponsor lists union trimmed NFC names and deduplicate exact matches');
     assert.match(badge('  Cafe\u0301 ',listNames),/excellent-member-badge/,'trimmed canonically equivalent names receive a badge');
     assert.equal(badge('가나다2',listNames),'','matching is exact and does not use fuzzy prefixes');
+    const expiring=[{data:{entries:[{name:'기존선납',expiresAt:'2027-05-01'},{name:'개별연장',expiresAt:'2027-12-31'}]}}];
+    assert.deepEqual([...names(expiring,'2027-05-01')].sort(),['개별연장','기존선납'].sort(),'the expiry date remains active through the stated day');
+    assert.deepEqual([...names(expiring,'2027-05-02')],['개별연장'],'an expired prepaid member automatically loses the badge');
+    assert.equal(names([{data:{entries:[{name:'예전선납'}]}}],'2027-05-02').size,0,'legacy prepaid entries default to the 2027-05-01 expiry');
+    assert.deepEqual([...names([{data:{entries:[]}},{data:{entries:[{name:'찬조회원'}]}}],'2027-05-02')],['찬조회원'],'sponsor-based excellent membership remains independent of prepaid expiry');
   }
   {
     const member=ranking('가나다',true),snapshot=JSON.stringify(member);
@@ -81,9 +86,21 @@ export async function runExcellentMemberChecks(){
     present=false;await h.view.seeds(h.view.routeToken());assert.doesNotMatch(h.app.querySelector('#seedList').innerHTML,/excellent-member-badge/,'removing a list entry clears the badge on the next seed load');
   }
   {
-    const h=seedsHarness({failLists:true,rankings:[ranking()]});await h.view.seeds(h.view.routeToken());
+    const excellent={...ranking('우수회원'),member_id:'member-excellent',regular_attendance_3m:0},ghost={...ranking('미출석회원'),member_id:'member-ghost',rank:2,regular_attendance_3m:0};
+    const h=seedsHarness({rankings:[excellent,ghost],request:async path=>{
+      if(path==='/api/rankings')return {items:[excellent,ghost],today:'2026-11-16',updatedDate:'2026-11-16'};
+      if(path==='/api/ledger-lists/prepaid')return {data:{entries:[{name:'우수회원',expiresAt:'2027-05-01'}]}};
+      if(path==='/api/ledger-lists/sponsors')return {data:{entries:[]}};
+    }});
+    await h.view.seeds(h.view.routeToken());const markup=h.app.querySelector('#seedList').innerHTML;
+    assert.equal((markup.match(/excellent-member-badge/g)||[]).length,1);assert.equal((markup.match(/ghost-member-badge/g)||[]).length,1);
+    assert.match(markup,/우수회원[\s\S]*?excellent-member-badge/);assert.match(markup,/미출석회원[\s\S]*?ghost-member-badge/);
+  }
+  {
+    const h=seedsHarness({failLists:true,rankings:[{...ranking(),regular_attendance_3m:0}]});await h.view.seeds(h.view.routeToken());
     assert.match(h.app.innerHTML,/우수회원 표시를 불러오지 못했습니다/,'ordinary list API failures clear badge state and show a status message');
     assert.doesNotMatch(h.app.innerHTML,/excellent-member-badge/,'failed list reads do not keep stale badges');
+    assert.doesNotMatch(h.app.innerHTML,/ghost-member-badge/,'unknown excellent-member state never mislabels a member as ghost');
   }
   {
     const rankings=deferred(),prepaid=deferred(),sponsors=deferred();
