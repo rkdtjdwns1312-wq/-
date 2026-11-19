@@ -6,6 +6,7 @@ const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:
 const conflict=()=>json({error:'콕 재고 기록이 변경되었거나 이미 사용한 저장 번호입니다. 최신 내용을 확인해주세요.',conflict:true},409);
 const unavailable=()=>json({error:'콕 재고 기록을 불러오거나 저장하지 못했습니다. 잠시 후 다시 시도해주세요.'},503);
 const exactKeys=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
+const note=value=>typeof value==='string'&&value.length<=5000&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(value);
 function calendarDate(value){
   if(typeof value!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)||value.startsWith('0000'))return false;
   const time=Date.parse(value+'T00:00:00.000Z');
@@ -15,7 +16,8 @@ function validEntries(entries){
   if(!Array.isArray(entries)||entries.length>MAX_ENTRIES)return false;
   const ids=new Set();
   for(const entry of entries){
-    if(!exactKeys(entry,['id','date','change'])||typeof entry.id!=='string'||!uuid.test(entry.id)||ids.has(entry.id.toLowerCase())||!calendarDate(entry.date)||!Number.isSafeInteger(entry.change)||entry.change===0||Math.abs(entry.change)>MAX_CHANGE)return false;
+    const legacy=exactKeys(entry,['id','date','change']),current=exactKeys(entry,['id','date','change','note']);
+    if(!(legacy||current)||typeof entry.id!=='string'||!uuid.test(entry.id)||ids.has(entry.id.toLowerCase())||!calendarDate(entry.date)||!Number.isSafeInteger(entry.change)||entry.change===0||Math.abs(entry.change)>MAX_CHANGE||(current&&!note(entry.note)))return false;
     ids.add(entry.id.toLowerCase());
   }
   let cumulative=0;
@@ -25,7 +27,9 @@ function validEntries(entries){
   }
   return true;
 }
-const payloadOf=value=>({entries:value.entries.map(entry=>({id:entry.id.toLowerCase(),date:entry.date,change:entry.change}))});
+const noteMap=entries=>new Map((entries||[]).map(entry=>[String(entry.id||'').toLowerCase(),typeof entry.note==='string'?entry.note:'']));
+const payloadOf=(value,existingNotes=new Map())=>({entries:value.entries.map(entry=>{const id=entry.id.toLowerCase();return {id,date:entry.date,change:entry.change,note:Object.hasOwn(entry,'note')?entry.note:(existingNotes.get(id)||'')};})});
+const requestPayloadOf=(value,baseEntries)=>JSON.stringify({version:value.version,...payloadOf(value,noteMap(baseEntries))});
 function unpack(row){
   if(!row||!Number.isSafeInteger(row.version)||row.version<0)throw new Error('Missing shuttle inventory state');
   const payload=JSON.parse(row.payload);
@@ -57,13 +61,15 @@ export async function shuttleInventory(request,env){
     if(request.method==='GET')return json({data:unpack(await readState())});
     const parsed=await readInput(request);if(parsed.error)return parsed.error;
     const input=parsed.data;
-    if(!exactKeys(input,['entries','version','operation'])||!Number.isSafeInteger(input.version)||input.version<0||input.version>=Number.MAX_SAFE_INTEGER||typeof input.operation!=='string'||!uuid.test(input.operation)||!validEntries(input.entries))return json({error:'날짜와 콕 변동 개수를 확인해주세요. 누계는 0개보다 작아질 수 없습니다.'},400);
-    const operation=input.operation.toLowerCase(),payload=payloadOf(input),requestPayload=JSON.stringify({version:input.version,...payload});
-    const previousOperation=()=>env.DB.prepare('SELECT request_payload,new_snapshot FROM shuttle_inventory_revisions WHERE operation=?').bind(operation).first();
-    const replay=row=>row.request_payload===requestPayload?json({data:JSON.parse(row.new_snapshot)}):conflict();
+    if(!exactKeys(input,['entries','version','operation'])||!Number.isSafeInteger(input.version)||input.version<0||input.version>=Number.MAX_SAFE_INTEGER||typeof input.operation!=='string'||!uuid.test(input.operation)||!validEntries(input.entries))return json({error:'날짜·콕 변동 개수·메모를 확인해주세요. 누계는 0개보다 작아질 수 없습니다.'},400);
+    const operation=input.operation.toLowerCase();
+    const previousOperation=()=>env.DB.prepare('SELECT request_payload,previous_snapshot,new_snapshot FROM shuttle_inventory_revisions WHERE operation=?').bind(operation).first();
+    const replay=row=>{const previous=JSON.parse(row.previous_snapshot),stored=JSON.parse(row.request_payload);return requestPayloadOf(stored,previous.entries)===requestPayloadOf(input,previous.entries)?json({data:JSON.parse(row.new_snapshot)}):conflict();};
     const prior=await previousOperation();if(prior)return replay(prior);
     const current=unpack(await readState());
     if(current.version!==input.version){const raced=await previousOperation();return raced?replay(raced):conflict();}
+    const payload=payloadOf(input,noteMap(current.entries)),requestPayload=JSON.stringify({version:input.version,...payload});
+    if(new TextEncoder().encode(JSON.stringify({...payload,version:input.version,operation})).byteLength>MAX_BYTES)return json({error:'메모를 포함한 전체 입력 내용은 256 KiB 이하여야 합니다.'},413);
     const at=new Date().toISOString(),next={...payload,version:input.version+1,updatedAt:at};
     const result=await env.DB.batch([
       env.DB.prepare(`INSERT INTO shuttle_inventory_revisions(operation,version,request_payload,previous_snapshot,new_snapshot,created_at)

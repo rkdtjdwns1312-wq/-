@@ -77,7 +77,7 @@ export async function runMemberScheduleWriteChecks(){
     const closed={...draft(),settledAt:new Date().toISOString(),settlementMode:'unscored'};
     db.prepare('UPDATE board_posts SET payload=? WHERE id=?').run(JSON.stringify(closed),'member-today');
     assert.equal((await put('member-today',draft(),3,member)).status,403);
-    const deniedPosts=['/api/posts/legacy-today/title','/api/posts/legacy-today/settle','/api/posts/legacy-today/unsettle','/api/posts/legacy-today/substitute','/api/people','/api/people/update','/api/people/hide','/api/backups','/api/operator-role'];
+    const deniedPosts=['/api/posts/legacy-today/title','/api/posts/legacy-today/settle','/api/posts/legacy-today/unsettle','/api/posts/legacy-today/substitute','/api/people','/api/people/update','/api/people/hide','/api/people/demote','/api/backups','/api/operator-role'];
     for(const endpoint of deniedPosts)assert.equal((await call(endpoint,'POST',{},member)).status,403,endpoint);
     for(const mode of ['scored','attendance','unscored'])assert.equal((await call('/api/posts/legacy-today/settle','POST',{version:2,operation:crypto.randomUUID(),mode},member)).status,403,'all closure modes remain operator-only: '+mode);
     assert.equal((await call('/api/posts/legacy-today','DELETE',undefined,member)).status,403);

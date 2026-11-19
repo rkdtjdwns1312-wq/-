@@ -27,6 +27,7 @@ export async function runManualAttendanceChecks(){
   assert.ok(db.prepare("SELECT 1 FROM manual_attendance WHERE attendance_date='2026-09-02' AND person_name='네오' AND reported_name='네오'").get(),'corrected 네오 entry is stored');
   assert.throws(()=>db.prepare("INSERT INTO manual_attendance VALUES('2026-02-29','잘못된날짜','잘못된날짜','now')").run());
   assert.throws(()=>db.prepare("INSERT INTO manual_attendance VALUES('2026-99-09','잘못된월','잘못된월','now')").run());
+  db.exec(readFileSync(new URL('./drizzle/0025_member_to_guest.sql',import.meta.url),'utf8'));
   const members=db.prepare('SELECT member_id,name,promoted_guest_id FROM ranking_members WHERE hidden=0').all(),histories=await readAttendanceHistories(wrap(db),members);
   const byName=new Map(members.map(member=>[member.name,histories.get(member.member_id)]));
   for(const day of ['2026-08-26','2026-09-09','2026-11-01'])assert.ok(byName.get('엽이').includes(day));

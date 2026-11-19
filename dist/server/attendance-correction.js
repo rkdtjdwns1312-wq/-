@@ -1,6 +1,7 @@
 import { attendancePolicy } from './attendance-policy.js';
 import { orderRankingRows,seedForPoints } from './rankings.js';
 import { commitRoster,updateRows,insertRows } from './roster-write.js';
+import { createPersonLineage } from './person-lineage.js';
 
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const tables=['board_posts','ranking_members','guests','ranking_settlements','ranking_events','guest_events','people_changes','score_point_history','roster_write_revision'];
@@ -38,9 +39,16 @@ export function planAttendanceCorrection(snapshot){
   if(!candidates.length)return {candidates:[],people:[],credits:0,pointsRemoved:0,updates:null};
   const candidateIds=new Set(candidates.map(c=>c.id)),first=candidates[0].settledAt;
   const members=new Map(s.ranking_members.map(r=>[r.member_id,r]));
-  const promoted=new Map(s.ranking_members.filter(r=>r.promoted_guest_id).map(r=>[r.promoted_guest_id,r.member_id]));
-  const canonical=(type,id)=>type==='guest'&&promoted.has(id)?key('member',promoted.get(id)):key(type,id);
-  const current=new Map([...s.ranking_members.map(r=>[key('member',r.member_id),r]),...s.guests.filter(r=>!promoted.has(r.guest_id)).map(r=>[key('guest',r.guest_id),r])]);
+  const lineage=createPersonLineage(s.ranking_members,s.guests),canonicalKeys=new Map(),current=new Map();
+  const assign=(type,row,force=false)=>{const id=row.member_id||row.guest_id,root=key(type,id);if(!force&&canonicalKeys.has(root))return;current.set(root,row);for(const person of lineage.component(type,id))if(force||!canonicalKeys.has(key(person.type,person.id)))canonicalKeys.set(key(person.type,person.id),root);};
+  for(const row of s.ranking_members.filter(r=>!r.hidden))assign('member',row,true);
+  for(const row of s.guests.filter(r=>!r.hidden))assign('guest',row,true);
+  const convertedMembers=new Set(s.guests.filter(r=>r.demoted_member_id).map(r=>r.demoted_member_id)),promotedGuests=new Set(s.ranking_members.filter(r=>r.promoted_guest_id).map(r=>r.promoted_guest_id));
+  for(const row of s.ranking_members.filter(r=>r.hidden&&!convertedMembers.has(r.member_id)))assign('member',row);
+  for(const row of s.guests.filter(r=>r.hidden&&!promotedGuests.has(r.guest_id)))assign('guest',row);
+  for(const row of s.ranking_members.filter(r=>r.hidden))assign('member',row);
+  for(const row of s.guests.filter(r=>r.hidden))assign('guest',row);
+  const canonical=(type,id)=>canonicalKeys.get(key(type,id))||key(type,id);
   const timelines=new Map([...current.keys()].map(k=>[k,[]]));
   const add=(k,step)=>{ensure(timelines.has(k),'정산 대상 회원을 찾을 수 없어 정정을 중단했습니다.');timelines.get(k).push(step);};
   for(const [type,list] of [['member',s.ranking_events],['guest',s.guest_events]])for(const e of list){
@@ -89,6 +97,7 @@ export function planAttendanceCorrection(snapshot){
     row.points=points;row.floor_protected_at=floor;
   }
   const valueAt=(k,at,order,after=false)=>{
+    const separator=k.indexOf(':');k=canonical(k.slice(0,separator),k.slice(separator+1));
     const steps=timelines.get(k)||[],future=steps.find(t=>t.at>at||(t.at===at&&(t.order>order||(!after&&t.order===order))));
     const past=steps.filter(t=>t.at<at||(t.at===at&&(t.order<order||(after&&t.order===order)))).at(-1);
     const row=current.get(k);ensure(row,'과거 순위 명단의 회원을 찾지 못했습니다.');
@@ -121,14 +130,14 @@ export function planAttendanceCorrection(snapshot){
   const manualAfter=new Set(s.people_changes.filter(e=>e.action==='update'&&!String(e.id).startsWith('attendance-fix-')&&e.before_points!==e.after_points&&e.created_at>=latest.settled_at).map(e=>canonical(e.person_type,e.person_id)));
   const refreshed=row=>{
     const type=row.member_id?'member':'guest',id=row.member_id||row.guest_id,k=key(type,id);
-    const e=type==='member'?(latestMembers.get(id)||latestGuests.get(row.promoted_guest_id)):latestGuests.get(id);
+    const e=lineage.component(type,id).map(person=>person.type==='member'?latestMembers.get(person.id):latestGuests.get(person.id)).find(Boolean);
     const delta=e&&!manualAfter.has(k)?e.points_after-e.points_before:0;
     const protectedNow=Boolean(e&&!manualAfter.has(k)&&e.win_points+e.loss_points>0&&row.points===20&&e.points_after<=20);
     return {...row,previous_points:row.points-delta,attendance:e?.attendance_points||0,wins:e?.win_points||0,losses:e?.loss_points||0,rank_protected:protectedNow?1:0,...(type==='member'?{seed:seedForPoints(row.points),previous_rank:e?.rank_before??row.previous_rank,rank_movement:e?.rank_before&&!protectedNow&&!manualAfter.has(k)&&e.win_points+e.loss_points>0?e.rank_before-e.rank_after:0}:{})};
   };
   const active=orderRankingRows(s.ranking_members.filter(r=>!r.hidden).map(r=>({...r,rank:lastRanks.get(r.member_id)??lastRanks.size+r.rank}))).map(refreshed);
   const memberRows=[...active,...s.ranking_members.filter(r=>r.hidden).map(r=>({...r,seed:seedForPoints(r.points)}))];
-  const guestRows=s.guests.filter(r=>!promoted.has(r.guest_id)).map(r=>r.hidden?r:refreshed(r));
+  const guestRows=s.guests.map(r=>r.hidden?r:refreshed(r));
   const memberColumns=['points','seed','rank','previous_rank','previous_points','attendance','wins','losses','rank_movement','rank_protected','floor_protected_at'];
   const guestColumns=['points','previous_points','attendance','wins','losses','rank_protected','floor_protected_at'];
   const updates={

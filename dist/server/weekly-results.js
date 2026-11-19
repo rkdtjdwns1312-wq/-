@@ -1,5 +1,7 @@
 // Weekly display comes from the latest confirmed settlement, not draft creation.
 // Legacy zeroed display columns can therefore recover without replaying scores.
+import { readPersonLineage } from './person-lineage.js';
+
 export async function readWeeklyResults(db){
   const {results}=await db.prepare(`
     WITH latest AS (
@@ -24,6 +26,10 @@ export async function readWeeklyResults(db){
     const edits=await db.prepare("SELECT DISTINCT person_type,person_id FROM people_changes WHERE action='update' AND id NOT LIKE 'attendance-fix-%' AND before_points<>after_points AND created_at>=?").bind(results[0].settled_at).all();
     for(const edit of edits.results)pointEdits.add(edit.person_type+':'+edit.person_id);
   }
+  const lineage=await readPersonLineage(db);
+  const related=(type,id)=>lineage.component(type,id);
+  const eventFor=(type,id)=>related(type,id).map(person=>person.type==='member'?members.get(person.id):guests.get(person.id)).find(Boolean);
+  const edited=(type,id)=>related(type,id).some(person=>pointEdits.has(person.type+':'+person.id));
   function display(row,event,pointEdited){
     // A recorded manual correction intentionally clears arrows. Draft resets have
     // no people_changes entry. Cache checks also avoid suppressing a settlement
@@ -41,7 +47,7 @@ export async function readWeeklyResults(db){
   }
   return {
     scheduleId:results[0]?.schedule_id||null,settledAt:results[0]?.settled_at||null,
-    member(row){const {promoted_guest_id,...publicRow}=row;return display(publicRow,members.get(row.member_id)||guests.get(promoted_guest_id),pointEdits.has('member:'+row.member_id)||pointEdits.has('guest:'+promoted_guest_id));},
-    guest(row){return display(row,guests.get(row.guest_id),pointEdits.has('guest:'+row.guest_id));}
+    member(row){const {promoted_guest_id,...publicRow}=row;return display(publicRow,eventFor('member',row.member_id),edited('member',row.member_id));},
+    guest(row){const {demoted_member_id,...publicRow}=row;return display(publicRow,eventFor('guest',row.guest_id),edited('guest',row.guest_id));}
   };
 }

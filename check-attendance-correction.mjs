@@ -103,7 +103,7 @@ export async function runAttendanceCorrectionChecks(){
     const undo=await worker.fetch(new Request('https://attendance.test/api/posts/good/unsettle',{method:'POST',headers:{origin:'https://attendance.test','content-type':'application/json','x-kokkiri-editor':'attendance-test'},body:JSON.stringify({version:2})}),h.env);
     assert.equal(undo.status,200);assert.equal(h.sql.prepare('SELECT points FROM ranking_members WHERE member_id=?').get(h.ids[0]).points,current-3,'latest undo uses corrected delta, not double correction');
   }finally{h.sql.close();}
-  for(const scenario of ['gap','failure','race','promoted','small-scored']){
+  for(const scenario of ['gap','failure','race','promoted','demoted','demoted-hidden','small-scored']){
     const f=fixture();try{
       f.legacyClose('bad','2026-09-21T01:00:00.000Z',f.ids.map(id=>({id,a:1,w:scenario==='small-scored'?1:0,l:0})),[{id:f.guest.guest_id,a:1,w:0,l:0}]);
       if(scenario==='small-scored'){
@@ -114,10 +114,15 @@ export async function runAttendanceCorrectionChecks(){
         const g=f.sql.prepare('SELECT * FROM guests WHERE guest_id=?').get(f.guest.guest_id);
         f.sql.prepare('INSERT INTO ranking_members(member_id,name,points,seed,rank,previous_rank,previous_points,updated_at,promoted_guest_id) VALUES (?,?,?,?,999,999,?,?,?)').run('promoted-test','promoted test',g.points,seedForPoints(g.points),g.points,'2026-09-21T02:00:00.000Z',g.guest_id);f.sql.prepare('UPDATE guests SET hidden=1 WHERE guest_id=?').run(g.guest_id);
       }
+      if(scenario==='demoted'||scenario==='demoted-hidden'){
+        const m=f.sql.prepare('SELECT * FROM ranking_members WHERE member_id=?').get(f.ids[0]);
+        f.sql.prepare('UPDATE ranking_members SET hidden=1 WHERE member_id=?').run(m.member_id);
+        f.sql.prepare('INSERT INTO guests(guest_id,name,points,hidden,created_at,attendance,wins,losses,previous_points,rank_protected,floor_protected_at,edit_version,demoted_member_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('demoted-test',m.name,m.points,scenario==='demoted-hidden'?1:0,'2026-09-21T02:00:00.000Z',m.attendance,m.wins,m.losses,m.previous_points,m.rank_protected,m.floor_protected_at,1,m.member_id);
+      }
       const p=await f.run(),before=f.snapshot();
       if(scenario==='failure'){f.failWrite=true;const error=console.error;let response;try{console.error=()=>{};response=await f.call('POST',{fingerprint:p.fingerprint});}finally{console.error=error;}assert.equal(response.status,503);assert.equal(f.snapshot(),before,'failed transaction rolls back backup and all rows');}
       else if(scenario==='race'){f.beforeWrite=()=>f.sql.exec('UPDATE roster_write_revision SET revision=revision+1');assert.equal((await f.call('POST',{fingerprint:p.fingerprint})).status,409);assert.equal(f.sql.prepare('SELECT count(*) n FROM backups').get().n,0);}
-      else{const applied=await f.run('POST',{fingerprint:p.fingerprint});assert.equal(applied.pointsRemoved,5);if(scenario==='promoted'){assert.equal(f.sql.prepare("SELECT points FROM ranking_members WHERE member_id='promoted-test'").get().points,65);assert.equal(f.sql.prepare('SELECT points FROM guests WHERE guest_id=?').get(f.guest.guest_id).points,66,'do not debit a promoted guest twice');}else{assert.equal(f.sql.prepare("SELECT win_points FROM ranking_events WHERE schedule_id='bad' LIMIT 1").get().win_points,1);}}
+      else{const applied=await f.run('POST',{fingerprint:p.fingerprint});assert.equal(applied.pointsRemoved,5);if(scenario==='promoted'){assert.equal(f.sql.prepare("SELECT points FROM ranking_members WHERE member_id='promoted-test'").get().points,65);assert.equal(f.sql.prepare('SELECT points FROM guests WHERE guest_id=?').get(f.guest.guest_id).points,66,'do not debit a promoted guest twice');}else if(scenario==='demoted'||scenario==='demoted-hidden'){assert.equal(f.sql.prepare("SELECT points FROM guests WHERE guest_id='demoted-test'").get().points,f.sql.prepare('SELECT points FROM ranking_members WHERE member_id=?').get(f.ids[0]).points-1,'attendance correction follows the latest demoted guest even when hidden');}else{assert.equal(f.sql.prepare("SELECT win_points FROM ranking_events WHERE schedule_id='bad' LIMIT 1").get().win_points,1);}}
     }finally{f.sql.close();}
   }
   console.log('PASS: attendance correction preview/backup, floor absorption, manual edits, promotion, legacy small scored games, preserved wins, corrected undo, idempotency, auth, failure and race guards.');

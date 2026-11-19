@@ -51,7 +51,7 @@ new Function('return ('+client.toString()+')');
 assert.ok(client.toString().includes('id="addGuest"')&&client.toString().includes('adhoc'),'openPicker에 즉석 게스트 추가 기능이 있어야 합니다');
 assert.ok(client.toString().includes('id="deletePost"'),'상세 화면에 삭제 버튼이 있어야 합니다');
 assert.ok(client.toString().includes('meetingTypeBadge(p.meetingType)')&&client.toString().includes('d.meetingType=newScheduleInfo.meetingType'),'새 대진의 모임종류는 목록 배지와 저장 데이터로 연결되어야 합니다');
-assert.ok(client.toString().includes('personEditForm')&&client.toString().includes('/api/people/update')&&client.toString().includes('/api/people/history'),'운영진 사람 정보 수정·변경 이력 UI가 있어야 합니다');
+assert.ok(client.toString().includes('personEditForm')&&client.toString().includes('/api/people/update')&&client.toString().includes('/api/people/history')&&client.toString().includes('seedDemote')&&client.toString().includes('/api/people/demote'),'운영진 사람 정보 수정·변경 이력·게스트 전환 UI가 있어야 합니다');
 const noticeStart=client.toString().indexOf('function noticeHTML'),noticeEnd=client.toString().indexOf('let people',noticeStart),renderNotice=new Function('esc',client.toString().slice(noticeStart,noticeEnd)+';return noticeHTML;')(s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'));
 const noticeRendered=renderNotice('1. 첫 제목\n[소제목]\n🔴 쿠폰 누락자 및 미지급자\n2. 둘째 제목\n🔵 강조 메모\n<script>alert(1)</script>');
 assert.equal(noticeRendered,'<h2 class="nb-section"><span class="nb-num">1</span><span>첫 제목</span></h2><h3 class="nb-sub">소제목</h3><h2 class="nb-section nb-section-alert"><span>쿠폰 누락자 및 미지급자</span></h2><h2 class="nb-section"><span class="nb-num">2</span><span>둘째 제목</span></h2><p class="nb-note">🔵 강조 메모</p><p>&lt;script&gt;alert(1)&lt;/script&gt;</p>','공지 heading renderer는 🔴 경고 제목·기존 heading·메모·escaping을 보존해야 합니다');
@@ -259,6 +259,19 @@ const gsAfterProm=(await (await worker.fetch(new Request(origin+'/api/people'),e
 assert.ok(!gsAfterProm.some(p=>p.id===gsId));
 const gsPromMember=(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='점수게스트');
 assert.ok(gsPromMember);assert.equal(gsPromMember.points,32);assert.equal(gsPromMember.wins,1);assert.equal(gsPromMember.attendance,1);
+assert.equal((await worker.fetch(new Request(origin+'/api/people/demote',{method:'POST'}),env)).status,403);
+assert.equal((await worker.fetch(new Request(origin+'/api/people/demote',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({ids:[gsPromMember.member_id]})}),env)).status,200);
+const gsAfterDemote=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people.find(p=>p.name==='점수게스트');
+assert.ok(gsAfterDemote);assert.equal(gsAfterDemote.type,'guest');assert.equal(gsAfterDemote.points,32,'demoted points');assert.equal(gsAfterDemote.wins,1,'demoted wins');assert.equal(gsAfterDemote.attendance,1,'demoted attendance');
+assert.ok(!(await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.some(r=>r.member_id===gsPromMember.member_id));
+const gsDemotedVersion=(await (await worker.fetch(new Request(origin+'/api/posts/guest-score'),env)).json()).data.version;
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/guest-score/unsettle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:gsDemotedVersion})}),env)).status,200);
+const gsDemotedReverted=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people.find(p=>p.name==='점수게스트');
+assert.equal(gsDemotedReverted.points,30);assert.equal(gsDemotedReverted.wins,0);assert.equal(gsDemotedReverted.attendance,0);
+const gsDemotedOpenVersion=(await (await worker.fetch(new Request(origin+'/api/posts/guest-score'),env)).json()).data.version;
+assert.equal((await worker.fetch(new Request(origin+'/api/posts/guest-score/settle',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({version:gsDemotedOpenVersion,operation:'settle-gsc3'})}),env)).status,200);
+const gsDemotedResettled=(await (await worker.fetch(new Request(origin+'/api/people'),env)).json()).people.find(p=>p.name==='점수게스트');
+assert.equal(gsDemotedResettled.points,32);assert.equal(gsDemotedResettled.wins,1);assert.equal(gsDemotedResettled.attendance,1);
 // 요청 073·074: 홈페이지 관리자 — 로그인·운영진 임명/해제·백업
 const adminKey=await adminKeyFor(env);
 assert.equal((await worker.fetch(new Request(origin+'/api/admin-login',{method:'POST',headers:{origin,'content-type':'application/json','cf-connecting-ip':'admin-client'},body:JSON.stringify({password:'nope'})}),env)).status,401);
@@ -270,6 +283,7 @@ const opTarget=rkAll.find(r=>r.name==='구름');assert.equal(opTarget.is_operato
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-role',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({memberId:opTarget.member_id,on:1})}),env)).status,403);
 assert.equal((await worker.fetch(new Request(origin+'/api/operator-role',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-admin':adminKey},body:JSON.stringify({memberId:opTarget.member_id,on:1})}),env)).status,200);
 assert.equal((await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='구름').is_operator,1);
+assert.equal((await worker.fetch(new Request(origin+'/api/people/demote',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-editor':env.EDITOR_KEY},body:JSON.stringify({ids:[opTarget.member_id]})}),env)).status,409);
 await worker.fetch(new Request(origin+'/api/operator-role',{method:'POST',headers:{'content-type':'application/json','x-kokkiri-admin':adminKey},body:JSON.stringify({memberId:opTarget.member_id,on:0})}),env);
 assert.equal((await (await worker.fetch(new Request(origin+'/api/rankings'),env)).json()).items.find(r=>r.name==='구름').is_operator,0);
 assert.equal((await worker.fetch(new Request(origin+'/administrate-'+adminKey),env)).status,200);

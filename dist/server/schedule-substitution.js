@@ -1,5 +1,6 @@
 import { createScheduleTools } from './schedule-tools.js';
 import { rosterRevision } from './roster-write.js';
+import { createPersonLineage,activePersonAliases } from './person-lineage.js';
 
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const unpack=row=>({...JSON.parse(row.payload),id:row.id,kind:row.kind,version:row.version,createdAt:row.created_at,updatedAt:row.updated_at});
@@ -11,9 +12,9 @@ const conflict=()=>json({error:'다른 기기에서 대진이나 회원 정보�
 export async function legacyNamesAreUnambiguous(db,post){
   const names=new Set(post.names.filter((name,index)=>!post.participantIds?.[index]));
   if(!names.size)return true;
-  const roster=(await db.prepare("SELECT 'member' AS type,member_id AS id,name,hidden,promoted_guest_id FROM ranking_members UNION ALL SELECT 'guest',guest_id,name,hidden,NULL FROM guests").all()).results;
-  const promoted=new Map(roster.filter(p=>p.type==='member'&&p.promoted_guest_id).map(p=>[p.promoted_guest_id,p.id]));
-  const identity=(type,id)=>type==='guest'&&promoted.has(id)?'member:'+promoted.get(id):type+':'+id;
+  const roster=(await db.prepare("SELECT 'member' AS type,member_id AS id,name,hidden,promoted_guest_id,NULL AS demoted_member_id FROM ranking_members UNION ALL SELECT 'guest',guest_id,name,hidden,NULL,demoted_member_id FROM guests").all()).results;
+  const lineage=createPersonLineage(roster.filter(p=>p.type==='member').map(p=>({member_id:p.id,promoted_guest_id:p.promoted_guest_id})),roster.filter(p=>p.type==='guest').map(p=>({guest_id:p.id,demoted_member_id:p.demoted_member_id})));
+  const identity=(type,id)=>lineage.component(type,id).map(person=>person.type+':'+person.id).sort()[0];
   const known=new Map([...names].map(name=>[name,new Set()])),active=new Map([...names].map(name=>[name,new Set()]));
   for(const p of roster)if(names.has(p.name)){
     const key=identity(p.type,p.id);known.get(p.name).add(key);if(p.hidden===0)active.get(p.name).add(key);
@@ -42,12 +43,13 @@ export async function substituteSchedule(db,id,input){
   if(row.version!==input.version)return conflict();
   const oldName=input.oldName.trim(),newName=input.newName.trim();
   if(!Array.isArray(match)||match.length!==4||match.filter(n=>n===oldName).length!==1)return json({error:'선택한 라운드·코트에 기존 멤버가 있는지 확인해주세요.'},400);
-  const members=(await db.prepare('SELECT member_id AS id,name,promoted_guest_id FROM ranking_members WHERE hidden=0').all()).results;
-  const guests=(await db.prepare('SELECT guest_id AS id,name FROM guests WHERE hidden=0').all()).results;
+  const members=(await db.prepare('SELECT member_id AS id,name,promoted_guest_id FROM ranking_members WHERE hidden=0').all()).results.map(p=>({...p,type:'m'}));
+  const guests=(await db.prepare('SELECT guest_id AS id,name,demoted_member_id FROM guests WHERE hidden=0').all()).results.map(p=>({...p,type:'g'}));
   const roster=[...members,...guests],found=roster.filter(p=>p.name===newName);
   if(found.length!==1)return json({error:found.length?'같은 이름이 여러 명입니다. 시드현황에서 구별되는 이름으로 정리한 뒤 교체해주세요.':'교체 멤버를 시드현황의 회원·게스트 명단에서 찾지 못했습니다. 먼저 등록한 뒤 정확한 이름을 입력해주세요.'},400);
-  const person=found[0],byId=new Map(roster.map(p=>[p.id,p]));
-  for(const member of members)if(member.promoted_guest_id)byId.set(member.promoted_guest_id,member);
+  const person=found[0],byId=new Map(roster.map(p=>[p.id,p])),lineageAliases=await activePersonAliases(db,members.map(p=>({member_id:p.id})),guests.map(p=>({guest_id:p.id})));
+  for(const [id,target] of lineageAliases.memberAliases)byId.set(id,target.t==='m'?members.find(p=>p.id===target.id):guests.find(p=>p.id===target.id));
+  for(const [id,target] of lineageAliases.guestAliases)byId.set(id,target.t==='m'?members.find(p=>p.id===target.id):guests.find(p=>p.id===target.id));
   if(!await legacyNamesAreUnambiguous(db,post))return json({error:'옛 대진의 이름이 숨김·이름 변경 기록과 겹쳐 참가자를 확인할 수 없습니다. 참가자 ID를 확인한 뒤 다시 긴급교체해주세요.',conflict:true},409);
   // Legacy ID-less posts used member-name first, then guest-name resolution.
   // Freeze that same mapping, without guessing a real identity for adhoc names.

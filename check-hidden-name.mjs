@@ -10,6 +10,7 @@ function fixture(upgrade=true){
   const migrate=sql=>{db.exec('BEGIN');try{db.exec(sql);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}};
   for(const file of readdirSync(new URL('./drizzle/',import.meta.url)).filter(n=>n.endsWith('.sql')&&n<'0020').sort())migrate(readFileSync(new URL('./drizzle/'+file,import.meta.url),'utf8'));
   if(upgrade)migrate(migration);
+  migrate(readFileSync(new URL('./drizzle/0025_member_to_guest.sql',import.meta.url),'utf8'));
   let beforeBatch=null;
   const DB={prepare(sql){let params=[];const s=db.prepare(sql);return {
     bind(...values){assert.ok(values.length<=100);params=values;return this;},async first(){return s.get(...params)||null;},async all(){return {results:s.all(...params)};},async run(){return {meta:s.run(...params)};},

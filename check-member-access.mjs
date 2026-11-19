@@ -57,7 +57,7 @@ export async function runMemberAccessChecks(){
       assert.equal((await call(path,'POST',{},{...member,origin:'https://other.test'})).status,403,'cross-origin member write');
       assert.equal((await call(path,'POST',{},{...member,'content-type':'text/plain'})).status,415,'simple request content type');
     }
-    for(const path of ['/api/people','/api/people/hide','/api/people/promote','/api/operator-role','/api/backups','/api/posts/member-private/settle','/api/posts/member-private/unsettle','/api/posts/member-private/substitute','/api/member-access/config'])assert.equal((await call(path,'POST',{},member)).status,403,'member not operator: '+path);
+    for(const path of ['/api/people','/api/people/hide','/api/people/promote','/api/people/demote','/api/operator-role','/api/backups','/api/posts/member-private/settle','/api/posts/member-private/unsettle','/api/posts/member-private/substitute','/api/member-access/config'])assert.equal((await call(path,'POST',{},member)).status,403,'member not operator: '+path);
     assert.equal((await call('/api/posts/member-private','PUT',{},member)).status,403);
     assert.equal((await call('/api/live-courts','POST',{action:'close',version:0},member)).status,403);
     assert.equal((await call('/api/backups','GET',undefined,member)).status,403);

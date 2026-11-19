@@ -1,4 +1,5 @@
 import { resolveScheduleDate } from './member-schedule-policy.js';
+import { activePersonAliases } from './person-lineage.js';
 
 const cleanName=value=>typeof value==='string'?value.normalize('NFC').trim():'';
 
@@ -39,20 +40,22 @@ export async function readAttendanceHistories(db,members){
   const histories=new Map(members.map(member=>[member.member_id,new Set()]));
   const kindHistories=new Map(members.map(member=>[member.member_id,new Map()]));
   const dayKinds=new Map();
-  const byMemberId=new Map(members.map(member=>[member.member_id,member.member_id]));
-  const byPromotedGuestId=new Map(members.filter(member=>member.promoted_guest_id).map(member=>[member.promoted_guest_id,member.member_id]));
   const aliases=new Map();
-  for(const member of members)addAlias(aliases,member.name,member.member_id);
 
-  const [changesResult,postsResult,manualResult]=await Promise.all([
+  const [changesResult,postsResult,manualResult,lineage]=await Promise.all([
     db.prepare('SELECT person_type,person_id,before_name,after_name FROM people_changes').all(),
     db.prepare("SELECT payload,created_at FROM board_posts WHERE kind='schedule' ORDER BY created_at ASC,id ASC").all(),
-    db.prepare('SELECT attendance_date,person_name FROM manual_attendance ORDER BY attendance_date ASC,person_name ASC').all()
+    db.prepare('SELECT attendance_date,person_name FROM manual_attendance ORDER BY attendance_date ASC,person_name ASC').all(),
+    activePersonAliases(db,members,[])
   ]);
+  const byMemberId=new Map([...lineage.memberAliases].filter(([,target])=>target.t==='m').map(([id,target])=>[id,target.id]));
+  const byPromotedGuestId=new Map([...lineage.guestAliases].filter(([,target])=>target.t==='m').map(([id,target])=>[id,target.id]));
+  const identityOf=(type,id)=>lineage.lineage.component(type,id).map(person=>person.type+':'+person.id).sort()[0];
+  const currentByIdentity=new Map();
+  for(const member of members){const identity=identityOf('member',member.member_id);currentByIdentity.set(identity,member.member_id);addAlias(aliases,member.name,identity);}
   for(const change of changesResult.results||[]){
-    const memberId=change.person_type==='member'?byMemberId.get(change.person_id):change.person_type==='guest'?byPromotedGuestId.get(change.person_id):null;
-    if(!memberId)continue;
-    addAlias(aliases,change.before_name,memberId);addAlias(aliases,change.after_name,memberId);
+    const identity=identityOf(change.person_type,change.person_id);
+    addAlias(aliases,change.before_name,identity);addAlias(aliases,change.after_name,identity);
   }
 
   function addAttendance(memberId,day,kind,explicit=false){
@@ -79,14 +82,14 @@ export async function readAttendanceHistories(db,members){
       const participantId=typeof ids[index]==='string'?ids[index]:'';
       let memberId=participantId&&(byMemberId.get(participantId)||byPromotedGuestId.get(participantId));
       if(!memberId&&participantId)continue; // a known ID that is not a current member belongs to a guest
-      if(!memberId){const matches=aliases.get(name);if(matches?.size===1)memberId=[...matches][0];}
+      if(!memberId){const matches=aliases.get(name);if(matches?.size===1)memberId=currentByIdentity.get([...matches][0]);}
       if(memberId)addAttendance(memberId,day,kind,explicit);
     }
   }
   for(const row of manualResult.results||[]){
     const name=cleanName(row.person_name),matches=aliases.get(name);
     const dayKind=dayKinds.get(row.attendance_date);
-    if(matches?.size===1)addAttendance([...matches][0],row.attendance_date,dayKind?.kind||attendanceKind(row.attendance_date),Boolean(dayKind?.explicit));
+    if(matches?.size===1){const memberId=currentByIdentity.get([...matches][0]);if(memberId)addAttendance(memberId,row.attendance_date,dayKind?.kind||attendanceKind(row.attendance_date),Boolean(dayKind?.explicit));}
   }
   const result=new Map([...histories].map(([memberId,days])=>[memberId,[...days].sort()]));
   result.kinds=new Map([...kindHistories].map(([memberId,kinds])=>[memberId,new Map([...kinds].map(([day,value])=>[day,value.kind]))]));

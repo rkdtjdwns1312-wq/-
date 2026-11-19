@@ -26,6 +26,16 @@ function harness(){
 export async function runServerAuditChecks(){
   {
     const h=harness();try{
+      const target=h.people().find(person=>!person.is_operator),adminKey=await adminKeyFor(h.env);
+      h.beforeBatch=async()=>await h.data('/api/people/demote','POST',{ids:[target.member_id]});
+      const response=await h.call('/api/operator-role','POST',{memberId:target.member_id,on:1},false,{'x-kokkiri-admin':adminKey});
+      assert.equal(response.status,409,'member conversion between role lookup and write must invalidate the role change');
+      assert.ok(!h.sqlite.prepare('SELECT 1 FROM ranking_members WHERE member_id=? AND hidden=0').get(target.member_id));
+      assert.equal(h.sqlite.prepare('SELECT is_operator FROM ranking_members WHERE member_id=?').get(target.member_id).is_operator,0);
+    }finally{h.sqlite.close();}
+  }
+  {
+    const h=harness();try{
       await h.create('race-a');await h.create('race-b');const before=h.person();
       h.beforeBatch=async()=>assert.equal((await h.settle('race-b')).status,200);
       const r=await h.settle('race-a');
@@ -111,12 +121,12 @@ export async function runServerAuditChecks(){
   {
     const h=harness();try{
       const adminKey=await adminKeyFor(h.env),adminHeaders={'x-kokkiri-admin':adminKey};
-      for(const path of ['/api/people','/api/people/update','/api/people/hide','/api/people/promote','/api/posts/missing/result','/api/operator-role']){
+      for(const path of ['/api/people','/api/people/update','/api/people/hide','/api/people/promote','/api/people/demote','/api/posts/missing/result','/api/operator-role']){
         for(const body of [null,[],1,'bad'])assert.equal((await h.call(path,'POST',body,true,adminHeaders)).status,400,path+' malformed body');
       }
       await h.create('invalid-result');assert.equal((await h.call('/api/posts/invalid-result/result','POST',{key:'00-0',winner:'a'},false)).status,400);
       assert.equal((await h.call('/api/people','POST',{name:'소수 점수',type:'member',points:20.5})).status,400);
-      for(const path of ['/api/people','/api/people/update','/api/people/hide','/api/people/promote','/api/posts/x/settle','/api/posts/x/unsettle','/api/operator-role','/api/backups'])assert.equal((await h.call(path,'POST',{},false)).status,403,path+' requires privilege');
+      for(const path of ['/api/people','/api/people/update','/api/people/hide','/api/people/promote','/api/people/demote','/api/posts/x/settle','/api/posts/x/unsettle','/api/operator-role','/api/backups'])assert.equal((await h.call(path,'POST',{},false)).status,403,path+' requires privilege');
       for(const path of ['/api/backups','/api/backups/missing','/api/people/history?type=member&id=member-1'])assert.equal((await h.call(path,'GET',undefined,false)).status,403);
       const originalError=console.error;console.error=()=>{};try{
         const r=await worker.fetch(new Request('https://audit.test/api/people',{headers:{'x-kokkiri-editor':h.env.EDITOR_KEY}}),{...h.env,DB:{prepare(){throw Error('injected DB failure');}}});assert.equal(r.status,503);assert.equal(typeof(await r.json()).error,'string');

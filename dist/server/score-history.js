@@ -18,22 +18,30 @@ export async function scoreHistory(request,env){
   // history (manual edits, snapshots, cancellation) remains untouched in its ledger.
   // Join by stable IDs, including a promoted member's former guest ID, never name.
   const target=type==='member'
-    ?'SELECT member_id AS id,name,points,promoted_guest_id AS guest_id FROM ranking_members WHERE hidden=0 AND member_id=?'
-    :'SELECT guest_id AS id,name,points,NULL AS guest_id FROM guests WHERE hidden=0 AND guest_id=?';
-  const cte=`WITH person AS (${target}), bounds AS (
+    ?'SELECT member_id AS id,name,points FROM ranking_members WHERE hidden=0 AND member_id=?'
+    :'SELECT guest_id AS id,name,points FROM guests WHERE hidden=0 AND guest_id=?';
+  const cte=`WITH RECURSIVE person AS (${target}), edges(from_type,from_id,to_type,to_id) AS (
+    SELECT 'member',member_id,'guest',promoted_guest_id FROM ranking_members WHERE promoted_guest_id IS NOT NULL
+    UNION ALL SELECT 'guest',promoted_guest_id,'member',member_id FROM ranking_members WHERE promoted_guest_id IS NOT NULL
+    UNION ALL SELECT 'guest',guest_id,'member',demoted_member_id FROM guests WHERE demoted_member_id IS NOT NULL
+    UNION ALL SELECT 'member',demoted_member_id,'guest',guest_id FROM guests WHERE demoted_member_id IS NOT NULL
+  ), identity(type,id) AS (
+    SELECT '${type}',id FROM person
+    UNION SELECT edges.to_type,edges.to_id FROM identity JOIN edges ON edges.from_type=identity.type AND edges.from_id=identity.id
+  ), bounds AS (
     SELECT strftime('%Y-%m-%dT%H:%M:%fZ',to_at,'-140 days') AS from_at,to_at
     FROM (SELECT coalesce(?,strftime('%Y-%m-%dT%H:%M:%fZ','now','+0.001 seconds')) AS to_at)
   ), history AS (
     SELECT 'member:'||e.schedule_id||':'||e.member_id AS id,e.schedule_id,
       strftime('%Y-%m-%dT%H:%M:%fZ',s.settled_at) AS recorded_at,e.points_before,e.points_after
     FROM ranking_events e JOIN ranking_settlements s ON s.schedule_id=e.schedule_id
-      JOIN person p ON '${type}'='member' AND e.member_id=p.id
+      JOIN identity i ON i.type='member' AND e.member_id=i.id
     WHERE strftime('%Y-%m-%dT%H:%M:%fZ',s.settled_at) IS NOT NULL
     UNION ALL
     SELECT 'guest:'||e.schedule_id||':'||e.guest_id AS id,e.schedule_id,
       strftime('%Y-%m-%dT%H:%M:%fZ',s.settled_at) AS recorded_at,e.points_before,e.points_after
     FROM guest_events e JOIN ranking_settlements s ON s.schedule_id=e.schedule_id
-      JOIN person p ON ('${type}'='guest' AND e.guest_id=p.id) OR e.guest_id=p.guest_id
+      JOIN identity i ON i.type='guest' AND e.guest_id=i.id
     WHERE strftime('%Y-%m-%dT%H:%M:%fZ',s.settled_at) IS NOT NULL
   ) `;
   const eventJson="json_object('id',id,'recorded_at',recorded_at,'points_before',points_before,'points_after',points_after,'schedule_id',schedule_id)";

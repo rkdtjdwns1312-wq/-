@@ -16,7 +16,7 @@ function database(){
     async all(){return {results:statement.all(...params)};},async run(){return {meta:statement.run(...params)};},
     execute(){return /^\s*(SELECT|WITH)\b/i.test(sql)?{results:statement.all(...params)}:{meta:statement.run(...params)};}
   };},async batch(statements){sqlite.exec('BEGIN');try{const result=statements.map(s=>s.execute());sqlite.exec('COMMIT');return result;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
-  for(const name of migrations.filter(n=>n<'0016_'))sqlite.exec(readFileSync(new URL(name,migrationDir),'utf8'));
+  for(const name of migrations.filter(n=>n<'0016_'||n==='0025_member_to_guest.sql'))sqlite.exec(readFileSync(new URL(name,migrationDir),'utf8'));
   return {sqlite,DB};
 }
 
